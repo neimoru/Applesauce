@@ -96,6 +96,18 @@ impl State {
     }
 }
 
+/// Tracks how irregularly the run loop pumps an audio unit's render callback,
+/// so that enough audio can be queued ahead to bridge the longest recent gap.
+#[derive(Clone, Default)]
+pub struct RenderAheadState {
+    /// Longest recent gap between render pumps, in seconds (decays slowly).
+    pub peak_gap: f64,
+    /// Statistics for the occasional diagnostic log line.
+    pub underruns_since_log: u32,
+    pub max_gap_since_log: f64,
+    pub last_log: Option<Instant>,
+}
+
 #[derive(Clone)]
 pub struct AudioComponentInstanceHostObject {
     pub started: bool,
@@ -107,6 +119,9 @@ pub struct AudioComponentInstanceHostObject {
     pub last_render_time: Option<Instant>,
     pub al_source: Option<ALuint>,
     pub is_running_handler: bool,
+    /// Adaptive render-ahead state for RemoteIO render callbacks, see
+    /// `render_audio_unit`.
+    pub render_ahead: RenderAheadState,
 
     // --- 3D Mixer State ---
     pub is_3d_mixer: bool,
@@ -138,6 +153,7 @@ impl Default for AudioComponentInstanceHostObject {
             last_render_time: None,
             al_source: None,
             is_running_handler: false,
+            render_ahead: RenderAheadState::default(),
             is_3d_mixer: false,
             mixer_buses: HashMap::new(),
         }

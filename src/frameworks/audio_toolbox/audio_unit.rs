@@ -1198,7 +1198,7 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
         }
         return;
     };
-    let Some(_last_render_time) = last_render_time else {
+    let Some(last_render_time) = last_render_time else {
         log_once!("render_audio_unit: skipped (last_render_time = None)");
         if let Some(obj) = env
             .framework_state
@@ -1254,17 +1254,64 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
 
     // The render callback is only pumped once per run loop iteration, so the
     // amount of audio queued ahead must cover the longest gap between
-    // iterations. Previously only one buffer was rendered per iteration and
+    // iterations. Originally only one buffer was rendered per iteration and
     // at most two were kept queued (~46ms), so whenever a frame took longer
     // than one buffer's duration (e.g. a busy physics scene running at
     // 30fps), the source drained faster than it was refilled and the audio
-    // crackled. Instead, top the queue up to a fixed amount of lead time on
-    // every iteration, rendering several buffers if needed.
-    const AUDIO_UNIT_LEAD_SECONDS: f64 = 0.1;
-    let target_buffers =
-        ((AUDIO_UNIT_LEAD_SECONDS * sample_rate / frames as f64).ceil() as i32).clamp(2, 16);
+    // crackled. Instead, top the queue up on every iteration to a lead time
+    // that covers the longest recent gap between iterations (at least
+    // 100ms, at most 300ms), rendering several buffers if needed.
+    const MIN_LEAD_SECONDS: f64 = 0.1;
+    const MAX_LEAD_SECONDS: f64 = 0.3;
+    // Gaps longer than this are loading screens or the app being paused;
+    // nothing can bridge those, so don't let them inflate the latency.
+    const MAX_TRACKED_GAP_SECONDS: f64 = 0.5;
+    // How long the remembered peak gap takes to halve.
+    const PEAK_GAP_HALF_LIFE_SECONDS: f64 = 10.0;
 
     let remaining_buffers = queued_buffers.saturating_sub(processed_buffers);
+    let buffer_seconds = frames as f64 / sample_rate;
+    let gap = now.duration_since(last_render_time).as_secs_f64();
+    // The source has played everything that was queued: an audible gap.
+    let underrun = queued_buffers > 0 && remaining_buffers == 0;
+    let lead_seconds = {
+        let obj = env
+            .framework_state
+            .audio_toolbox
+            .audio_components
+            .audio_component_instances
+            .get_mut(&audio_unit)
+            .unwrap();
+        let state = &mut obj.render_ahead;
+        state.peak_gap *= 0.5f64.powf(gap / PEAK_GAP_HALF_LIFE_SECONDS);
+        if gap < MAX_TRACKED_GAP_SECONDS {
+            state.peak_gap = state.peak_gap.max(gap);
+            state.max_gap_since_log = state.max_gap_since_log.max(gap);
+        }
+        let lead_seconds =
+            (state.peak_gap * 1.5 + buffer_seconds).clamp(MIN_LEAD_SECONDS, MAX_LEAD_SECONDS);
+        if underrun && gap < MAX_TRACKED_GAP_SECONDS {
+            state.underruns_since_log += 1;
+        }
+        if state.underruns_since_log > 0
+            && state
+                .last_log
+                .is_none_or(|t| now.duration_since(t).as_secs_f64() >= 10.0)
+        {
+            log!(
+                "Audio: {} underrun(s) since last report; longest gap between audio updates {:.0}ms; now buffering {:.0}ms ahead",
+                state.underruns_since_log,
+                state.max_gap_since_log * 1000.0,
+                lead_seconds * 1000.0,
+            );
+            state.underruns_since_log = 0;
+            state.max_gap_since_log = 0.0;
+            state.last_log = Some(now);
+        }
+        lead_seconds
+    };
+    let target_buffers = ((lead_seconds / buffer_seconds).ceil() as i32).clamp(2, 32);
+
     if remaining_buffers >= target_buffers {
         let mut drained_buffers = Vec::new();
         {
