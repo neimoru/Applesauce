@@ -849,19 +849,32 @@ impl Dyld {
                     .or_insert_with(|| mem.alloc(16).to_bits());
                 log_dbg!("Patched block class descriptor {} -> {:#x}", name, addr);
                 Ptr::from_bits(addr)
-            } else if name == "__ZTVN10__cxxabiv117__class_type_infoE"
+            } else if (name == "__ZTVN10__cxxabiv117__class_type_infoE"
                 || name == "__ZTVN10__cxxabiv120__si_class_type_infoE"
                 || name == "__ZTVN10__cxxabiv121__vmi_class_type_infoE"
                 || name == "__ZTVN10__cxxabiv119__pointer_type_infoE"
                 || name == "__ZTVN10__cxxabiv120__function_type_infoE"
                 || name == "__ZTVN10__cxxabiv116__enum_type_infoE"
                 || name == "__ZTVN10__cxxabiv117__pbase_type_infoE"
-                || name == "__ZTVN10__cxxabiv129__pointer_to_member_type_infoE"
+                || name == "__ZTVN10__cxxabiv129__pointer_to_member_type_infoE")
+                && !bins
+                    .iter()
+                    .any(|other_bin| other_bin.exported_symbols.contains_key(name))
             {
                 // C++ Itanium ABI type_info vtable. Without this every
                 // type_info object in the app has a NULL vptr, and any call
                 // through the vptr (dynamic_cast, exception type matching,
                 // type_info comparison) lands on address 0 and crashes.
+                //
+                // Only stub it when no loaded guest dylib exports it. Apps
+                // that link libstdc++.6.dylib get the real vtables (resolved
+                // further down, like other C++ RTTI symbols), consistent with
+                // the preference for guest dylibs in lazy linking. Stubbing
+                // them regardless made the real `__dynamic_cast` (which those
+                // apps also link from libstdc++) fail every cast, because the
+                // stub `__do_upcast`/`__do_dyncast` slots never match. In
+                // TinkerBox HD that left the part-selection widget stuck at
+                // the top-left corner of the screen.
                 //
                 // Layout (32-bit ARM, addend +8 from the symbol so callers
                 // land on the first method):
