@@ -2,8 +2,8 @@
 # from this branch, which carries the TinkerBox HD fixes, and publishes an
 # unsigned .ipa you can sideload. Runs entirely on GitHub's cloud Macs; no Mac of your own needed.
 #
-# It starts automatically when this file is added, and can be re-run any time
-# from the Actions tab ("Run workflow").
+# It runs on every push to the tinkerbox-build branch, and can be re-run any
+# time from the Actions tab.
 #
 # Contains no game files. You add your own TinkerBox copy on the phone.
 
@@ -12,8 +12,8 @@ name: Build TinkerBox IPA
 on:
   workflow_dispatch:
   push:
-    paths:
-      - .github/workflows/build-tinkerbox-ipa.yml
+    branches:
+      - tinkerbox-build
 
 jobs:
   build:
