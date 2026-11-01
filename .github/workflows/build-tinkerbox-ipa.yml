@@ -17,7 +17,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    # Xcode 27.1 (iOS 27.1 SDK) or newer is what lets iPhone Duo run the app
+    # full-screen on the big inner display instead of letterboxed.
+    runs-on: xcode-27
     timeout-minutes: 150
 
     steps:
@@ -26,10 +28,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Show Xcode version
+      - name: Pick Xcode 27.1
         run: |
-          echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
-          xcodebuild -version
+          XCODE=/Applications/Xcode_27.1.app
+          [ -d "$XCODE" ] || XCODE=$(xcode-select -p | sed 's#/Contents/Developer##')
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XCODE/Contents/Developer" xcodebuild -version
+          DEVELOPER_DIR="$XCODE/Contents/Developer" xcodebuild -showsdks | grep iphoneos
 
       - name: Install CMake and Ninja
         uses: lukka/get-cmake@latest
