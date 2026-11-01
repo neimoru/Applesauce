@@ -1956,6 +1956,33 @@ impl Window {
         };
         let x = (screen_width - scaled_width) / 2;
         let y = (screen_height - scaled_height) / 2;
+
+        // Log the host geometry whenever it changes (launch, rotation,
+        // folding/unfolding a device), so letterboxing can be diagnosed from
+        // a user's log file.
+        {
+            use std::sync::Mutex;
+            static LAST: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+            let mut last = LAST.lock().unwrap();
+            if *last != Some((screen_width, screen_height)) {
+                *last = Some((screen_width, screen_height));
+                let (window_width, window_height) = self.window.size();
+                log!(
+                    "Host drawable {}x{} px (window {}x{}); app {}x{} shown at {}x{}+{}+{}",
+                    screen_width,
+                    screen_height,
+                    window_width,
+                    window_height,
+                    app_width,
+                    app_height,
+                    scaled_width,
+                    scaled_height,
+                    x,
+                    y
+                );
+            }
+        }
+
         (x, y, scaled_width, scaled_height)
     }
 
