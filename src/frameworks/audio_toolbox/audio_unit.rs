@@ -1243,8 +1243,29 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
         }
     }
 
+    let target_frames = (sample_rate
+        * env
+            .framework_state
+            .audio_toolbox
+            .audio_session
+            .current_hardware_io_buffer_duration as f64)
+        .round() as u32;
+    let frames = target_frames.clamp(64, 2048);
+
+    // The render callback is only pumped once per run loop iteration, so the
+    // amount of audio queued ahead must cover the longest gap between
+    // iterations. Previously only one buffer was rendered per iteration and
+    // at most two were kept queued (~46ms), so whenever a frame took longer
+    // than one buffer's duration (e.g. a busy physics scene running at
+    // 30fps), the source drained faster than it was refilled and the audio
+    // crackled. Instead, top the queue up to a fixed amount of lead time on
+    // every iteration, rendering several buffers if needed.
+    const AUDIO_UNIT_LEAD_SECONDS: f64 = 0.1;
+    let target_buffers =
+        ((AUDIO_UNIT_LEAD_SECONDS * sample_rate / frames as f64).ceil() as i32).clamp(2, 16);
+
     let remaining_buffers = queued_buffers.saturating_sub(processed_buffers);
-    if remaining_buffers > 1 {
+    if remaining_buffers >= target_buffers {
         let mut drained_buffers = Vec::new();
         {
             let context = env
@@ -1295,74 +1316,78 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
         }
     }
 
-    let target_frames = (sample_rate
-        * env
-            .framework_state
-            .audio_toolbox
-            .audio_session
-            .current_hardware_io_buffer_duration as f64)
-        .round() as u32;
-    let frames = target_frames.clamp(64, 2048);
     let buffer_size =
         frames * stream_format.channels_per_frame * (stream_format.bits_per_channel / 8);
 
     let action_flags = env.mem.alloc_and_write(0u32);
 
     // Восстанавливаем логику из оригинала: Resident Evil 4 ожидает 2 буфера
-    let (audio_buffer_list, buffer1_data, buffer2_data): (
-        MutVoidPtr,
-        MutVoidPtr,
-        Option<MutVoidPtr>,
-    ) = if has_input_format {
-        let buf = env.mem.alloc(buffer_size);
-        let abl = env.mem.alloc_and_write(AudioBufferList::<1> {
-            number_buffers: 1,
-            buffers: [AudioBuffer {
-                number_channels: stream_format.channels_per_frame,
-                data_byte_size: buffer_size,
-                data: buf,
-            }],
-        });
-        (abl.cast(), buf, None)
+    let buffer1_data = env.mem.alloc(buffer_size);
+    let buffer2_data = if has_input_format {
+        None
     } else {
-        let buf1 = env.mem.alloc(buffer_size);
-        let buf2 = env.mem.alloc(buffer_size);
-        let abl = env.mem.alloc_and_write(AudioBufferList::<2> {
-            number_buffers: 2,
-            buffers: [
-                AudioBuffer {
-                    number_channels: stream_format.channels_per_frame,
-                    data_byte_size: buffer_size,
-                    data: buf1,
-                },
-                AudioBuffer {
-                    number_channels: stream_format.channels_per_frame,
-                    data_byte_size: buffer_size,
-                    data: buf2,
-                },
-            ],
-        });
-        (abl.cast(), buf1, Some(buf2))
+        Some(env.mem.alloc(buffer_size))
+    };
+    let audio_buffer_list: MutVoidPtr = if has_input_format {
+        env.mem.alloc(guest_size_of::<AudioBufferList<1>>())
+    } else {
+        env.mem.alloc(guest_size_of::<AudioBufferList<2>>())
     };
 
     let input_proc = callback.input_proc;
     let input_proc_ref = callback.input_proc_ref_con;
 
-    let _: OSStatus = input_proc.call_from_host(
-        env,
-        (
-            input_proc_ref,
-            action_flags,
-            nil.cast_void().cast_const(),
-            0u32,
-            frames,
-            audio_buffer_list,
-        ),
-    );
+    for _ in remaining_buffers..target_buffers {
+        // The callback may modify the flags and buffer list (e.g. the byte
+        // size), so reset them before every call.
+        env.mem.write(action_flags, 0u32);
+        if let Some(buffer2_data) = buffer2_data {
+            env.mem.write(
+                audio_buffer_list.cast(),
+                AudioBufferList::<2> {
+                    number_buffers: 2,
+                    buffers: [
+                        AudioBuffer {
+                            number_channels: stream_format.channels_per_frame,
+                            data_byte_size: buffer_size,
+                            data: buffer1_data,
+                        },
+                        AudioBuffer {
+                            number_channels: stream_format.channels_per_frame,
+                            data_byte_size: buffer_size,
+                            data: buffer2_data,
+                        },
+                    ],
+                },
+            );
+        } else {
+            env.mem.write(
+                audio_buffer_list.cast(),
+                AudioBufferList::<1> {
+                    number_buffers: 1,
+                    buffers: [AudioBuffer {
+                        number_channels: stream_format.channels_per_frame,
+                        data_byte_size: buffer_size,
+                        data: buffer1_data,
+                    }],
+                },
+            );
+        }
 
-    let (al_fmt, _, processed) =
-        decode_buffer(&env.mem, &stream_format, buffer1_data.cast(), buffer_size);
-    {
+        let _: OSStatus = input_proc.call_from_host(
+            env,
+            (
+                input_proc_ref,
+                action_flags,
+                nil.cast_void().cast_const(),
+                0u32,
+                frames,
+                audio_buffer_list,
+            ),
+        );
+
+        let (al_fmt, _, processed) =
+            decode_buffer(&env.mem, &stream_format, buffer1_data.cast(), buffer_size);
         let context = env
             .framework_state
             .audio_toolbox
@@ -1382,6 +1407,16 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
                 sample_rate as i32,
             );
             context.SourceQueueBuffers(al_source, 1, &b);
+        }
+    }
+
+    {
+        let context = env
+            .framework_state
+            .audio_toolbox
+            .al_context
+            .make_al_context_current(&mut env.openal_manager);
+        unsafe {
             let mut state = 0;
             context.GetSourcei(al_source, AL_SOURCE_STATE, &mut state);
             if state != AL_PLAYING {
