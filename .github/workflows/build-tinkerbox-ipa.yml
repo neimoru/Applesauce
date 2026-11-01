@@ -1,0 +1,177 @@
+# Builds Applesauce (a 64-bit iOS app that runs old 32-bit iPhone/iPad games)
+# with the TinkerBox HD fixes applied, and publishes an unsigned .ipa you can
+# sideload. Runs entirely on GitHub's cloud Macs; no Mac of your own needed.
+#
+# It starts automatically when this file is added, and can be re-run any time
+# from the Actions tab ("Run workflow").
+#
+# Contains no game files. You add your own TinkerBox copy on the phone.
+
+name: Build TinkerBox IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-tinkerbox-ipa.yml
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 150
+
+    steps:
+      - name: Download the emulator code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Apply the TinkerBox fixes
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          open("tinkerbox.patch", "wb").write(base64.b64decode(os.environ["PATCH_B64"]))
+          PY
+          git apply tinkerbox.patch
+          git --no-pager diff --stat
+        env:
+          PATCH_B64: |
+            ZGlmZiAtLWdpdCBhL09QVElPTlNfSEVMUC50eHQgYi9PUFRJT05TX0hFTFAudHh0CmluZGV4IGJh
+            NWU0ODdjLi5mMzI2ODIyZSAxMDA2NDQKLS0tIGEvT1BUSU9OU19IRUxQLnR4dAorKysgYi9PUFRJ
+            T05TX0hFTFAudHh0CkBAIC04OSw2ICs4OSwxMiBAQCBHYW1lIGNvbnRyb2xsZXIgb3B0aW9uczoK
+            IAogICAgICAgICBUaGlzIGlzIGEgZmxvYXRpbmctcG9pbnQgKGRlY2ltYWwpIG51bWJlciBiZXR3
+            ZWVuIDAgYW5kIDEuCiAKKyAgICAtLWRpc2FibGUtaXBhZC1hdXRvcm90YXRpb24tY29tcGVuc2F0
+            aW9uCisgICAgICAgIERpc2FibGVzIHRoZSBleHRyYSAxODAtZGVncmVlIHJvdGF0aW9uIGFwcGxp
+            ZWQgdG8gaVBhZCBhcHBzIGluCisgICAgICAgIGxhbmRzY2FwZSBieSB0aGUgZGlyZWN0IEVBR0wg
+            cHJlc2VudGVyLiBNb3N0IGlQYWQgbGFuZHNjYXBlIGdhbWVzCisgICAgICAgIG5lZWQgdGhhdCBy
+            b3RhdGlvbiwgYnV0IHNvbWUgKGUuZy4gVGlua2VyQm94IEhEKSBhbHJlYWR5IGRyYXcKKyAgICAg
+            ICAgdXByaWdodCBhbmQgYXJlIHByZXNlbnRlZCB1cHNpZGUtZG93biB3aXRoIGl0LgorCiAgICAg
+            LS1kaXNhYmxlLWFuYWxvZy1zdGljay10aWx0LWNvbnRyb2xzCiAgICAgICAgIERpc2FibGVzIG1h
+            cHBpbmcgb2YgYW5hbG9nIHN0aWNrIGlucHV0IHRvIHNpbXVsYXRlZCByb3RhdGlvbiBvZiB0aGUK
+            ICAgICAgICAgZGV2aWNlLgpkaWZmIC0tZ2l0IGEvc3JjL2ZyYW1ld29ya3Mvb3BlbmdsZXMvZWFn
+            bC5ycyBiL3NyYy9mcmFtZXdvcmtzL29wZW5nbGVzL2VhZ2wucnMKaW5kZXggYjE4YTBkNmMuLmFi
+            OTMwMGVjIDEwMDY0NAotLS0gYS9zcmMvZnJhbWV3b3Jrcy9vcGVuZ2xlcy9lYWdsLnJzCisrKyBi
+            L3NyYy9mcmFtZXdvcmtzL29wZW5nbGVzL2VhZ2wucnMKQEAgLTE1MzksNyArMTUzOSw4IEBAIHVu
+            c2FmZSBmbiBwcmVzZW50X3JlbmRlcmJ1ZmZlcihlbnY6ICZtdXQgRW52aXJvbm1lbnQsIGNvbnRl
+            eHQ6IGlkKSB7CiAgICAgLy8gICAgICAgIHRoZSBFQUdMIGxheWVyJ3MgdmlldyBoaWVyYXJjaHkg
+            YW5kIGFwcGx5IGl0IGhlcmUsIGluc3RlYWQgb2YKICAgICAvLyAgICAgICAgdXNpbmcgYSBkZXZp
+            Y2UtZmFtaWx5IGhldXJpc3RpYy4KICAgICBsZXQgbmVlZHNfYXV0b3JvdGF0aW9uX2NvbXBlbnNh
+            dGlvbiA9Ci0gICAgICAgIGRldmljZV9mYW1pbHkuaXNfaXBhZCgpCisgICAgICAgIGVudi5vcHRp
+            b25zLmlwYWRfYXV0b3JvdGF0aW9uX2NvbXBlbnNhdGlvbgorICAgICAgICAmJiBkZXZpY2VfZmFt
+            aWx5LmlzX2lwYWQoKQogICAgICAgICAgICAgJiYgIW1hdGNoZXMhKAogICAgICAgICAgICAgICAg
+            IGRldmljZV9vcmllbnRhdGlvbiwKICAgICAgICAgICAgICAgICBjcmF0ZTo6d2luZG93OjpEZXZp
+            Y2VPcmllbnRhdGlvbjo6UG9ydHJhaXQKZGlmZiAtLWdpdCBhL3NyYy9nbGVzL2dsZXMxX29uX2ds
+            Mi5ycyBiL3NyYy9nbGVzL2dsZXMxX29uX2dsMi5ycwppbmRleCA1ZjJjZmM4NC4uOWVkYmQ1NzQg
+            MTAwNjQ0Ci0tLSBhL3NyYy9nbGVzL2dsZXMxX29uX2dsMi5ycworKysgYi9zcmMvZ2xlcy9nbGVz
+            MV9vbl9nbDIucnMKQEAgLTc5LDYgKzc5LDEyIEBAIHB1YiBjb25zdCBDQVBBQklMSVRJRVM6ICZb
+            R0xlbnVtXSA9ICZbCiBwdWIgY29uc3QgVU5TVVBQT1JURURfQ0FQQUJJTElUSUVTOiAmW0dMZW51
+            bV0gPSAmWwogICAgIDB4ODYyMCwgLy8gR0xfVkVSVEVYX1BST0dSQU1fTlYKICAgICBnbDIxOjpU
+            RVhUVVJFLAorICAgIC8vIENsaXAgcGxhbmVzIGJleW9uZCBHTEVTMSdzIHNpeC4gRGVza3RvcCBH
+            TCByZXBvcnRzIGEgaGlnaGVyCisgICAgLy8gR0xfTUFYX0NMSVBfUExBTkVTLCBzbyBlbmdpbmVz
+            IHRoYXQgbG9vcCB1cCB0byB0aGUgcmVwb3J0ZWQgbWF4aW11bQorICAgIC8vIChlLmcuIE9ncmUz
+            RCkgdG91Y2ggdGhlc2UuIFRvbGVyYXRlIHRoZW07IGRlc2t0b3AgR0wgc3VwcG9ydHMgdGhlbS4K
+            KyAgICAvLyBOYXRpdmUgR0xFUzEgaG9zdHMgcmVwb3J0IDYgYW5kIG5ldmVyIHJlYWNoIHRoZXNl
+            LgorICAgIDB4MzAwNiwgLy8gR0xfQ0xJUF9QTEFORTYKKyAgICAweDMwMDcsIC8vIEdMX0NMSVBf
+            UExBTkU3CiBdOwogCiAvLy8gU3Vic2V0IG9mIFtDQVBBQklMSVRJRVNdIHRoYXQgaXMgcGFydCBv
+            ZiBkZXNrdG9wIE9wZW5HTCAyLjEgYnV0IE5PVCBwYXJ0IG9mCkBAIC0yNDY0LDcgKzI0NzAsMTcg
+            QEAgaW1wbCBHTEVTIGZvciBHTEVTMU9uR0wyPCdfPiB7CiAgICAgICAgICAgICAgICAgfHwgaW50
+            ZXJuYWxmb3JtYXQgYXMgR0xlbnVtID09IGdsMjE6OlJHQkEKICAgICAgICAgICAgICAgICB8fCBp
+            bnRlcm5hbGZvcm1hdCBhcyBHTGVudW0gPT0gZ2wyMTo6TFVNSU5BTkNFCiAgICAgICAgICAgICAg
+            ICAgfHwgaW50ZXJuYWxmb3JtYXQgYXMgR0xlbnVtID09IGdsMjE6OkxVTUlOQU5DRV9BTFBIQQor
+            ICAgICAgICAgICAgICAgIHx8IGludGVybmFsZm9ybWF0IGFzIEdMZW51bSA9PSBnbDIxOjpCR1JB
+            CiAgICAgICAgICk7CisgICAgICAgIC8vIEFQUExFX3RleHR1cmVfZm9ybWF0X0JHUkE4ODg4IHJl
+            cXVpcmVzIGludGVybmFsZm9ybWF0ID09IGZvcm1hdCA9PQorICAgICAgICAvLyBCR1JBLCBidXQg
+            ZGVza3RvcCBHTCBvbmx5IGFjY2VwdHMgQkdSQSBhcyBhIGZvcm1hdDsgdGhlIG1hdGNoaW5nCisg
+            ICAgICAgIC8vIGludGVybmFsIGZvcm1hdCBpcyBSR0JBLiAoTmF0aXZlIEdMRVMxIGhvc3RzLCBl
+            LmcuIGlPUywgZG9uJ3QgbmVlZAorICAgICAgICAvLyB0aGlzOiB0aGUgZHJpdmVyIGFjY2VwdHMg
+            QkdSQSBkaXJlY3RseS4pCisgICAgICAgIGxldCBpbnRlcm5hbGZvcm1hdCA9IGlmIGludGVybmFs
+            Zm9ybWF0IGFzIEdMZW51bSA9PSBnbDIxOjpCR1JBIHsKKyAgICAgICAgICAgIGdsMjE6OlJHQkEg
+            YXMgR0xpbnQKKyAgICAgICAgfSBlbHNlIHsKKyAgICAgICAgICAgIGludGVybmFsZm9ybWF0Cisg
+            ICAgICAgIH07CiAgICAgICAgIGFzc2VydCEoYm9yZGVyID09IDApOwogICAgICAgICBhc3NlcnQh
+            KAogICAgICAgICAgICAgZm9ybWF0ID09IGdsMjE6OkFMUEhBCmRpZmYgLS1naXQgYS9zcmMvb3B0
+            aW9ucy5ycyBiL3NyYy9vcHRpb25zLnJzCmluZGV4IDc4MDhiZWI4Li4zYzU1MzY3ZCAxMDA2NDQK
+            LS0tIGEvc3JjL29wdGlvbnMucnMKKysrIGIvc3JjL29wdGlvbnMucnMKQEAgLTY0LDYgKzY0LDEx
+            IEBAIHB1YiBzdHJ1Y3QgT3B0aW9ucyB7CiAgICAgcHViIHNjYWxlX2hhY2s6IE5vblplcm9VMzIs
+            CiAgICAgcHViIGRlYWR6b25lOiBmMzIsCiAgICAgcHViIGFuYWxvZ19zdGlja190aWx0X2NvbnRy
+            b2xzOiBib29sLAorICAgIC8vLyBXaGV0aGVyIHRoZSBleHRyYSBpUGFkIGxhbmRzY2FwZSBhdXRv
+            LXJvdGF0aW9uIGNvbXBlbnNhdGlvbiBpbiB0aGUKKyAgICAvLy8gZGlyZWN0IEVBR0wgcHJlc2Vu
+            dGVyIGlzIGFwcGxpZWQuIE1vc3QgaVBhZCBsYW5kc2NhcGUgZ2FtZXMgbmVlZCBpdCwKKyAgICAv
+            Ly8gYnV0IHNvbWUgKGUuZy4gVGlua2VyQm94IEhEKSBhbHJlYWR5IHByZXNlbnQgdXByaWdodCBh
+            bmQgYXJlIHR1cm5lZAorICAgIC8vLyB1cHNpZGUtZG93biBieSBpdC4KKyAgICBwdWIgaXBhZF9h
+            dXRvcm90YXRpb25fY29tcGVuc2F0aW9uOiBib29sLAogICAgIHB1YiB4X3RpbHRfcmFuZ2U6IGYz
+            MiwKICAgICBwdWIgeV90aWx0X3JhbmdlOiBmMzIsCiAgICAgcHViIHhfdGlsdF9vZmZzZXQ6IGYz
+            MiwKQEAgLTE0Myw2ICsxNDgsNyBAQCBpbXBsIERlZmF1bHQgZm9yIE9wdGlvbnMgewogICAgICAg
+            ICAgICAgaW9zX2VzMl9kaXJlY3RfcHJlc2VudDogZmFsc2UsCiAgICAgICAgICAgICBzY2FsZV9o
+            YWNrOiBOb25aZXJvVTMyOjpuZXcoMSkudW53cmFwKCksCiAgICAgICAgICAgICBhbmFsb2dfc3Rp
+            Y2tfdGlsdF9jb250cm9sczogdHJ1ZSwKKyAgICAgICAgICAgIGlwYWRfYXV0b3JvdGF0aW9uX2Nv
+            bXBlbnNhdGlvbjogdHJ1ZSwKICAgICAgICAgICAgIGRlYWR6b25lOiAwLjEsCiAgICAgICAgICAg
+            ICB4X3RpbHRfcmFuZ2U6IDYwLjAsCiAgICAgICAgICAgICB5X3RpbHRfcmFuZ2U6IDYwLjAsCkBA
+            IC0yNDYsNiArMjUyLDggQEAgaW1wbCBPcHRpb25zIHsKICAgICAgICAgICAgICAgICAubWFwX2Vy
+            cih8X3wgIkludmFsaWQgc2NhbGUgaGFjayBmYWN0b3IiLnRvX3N0cmluZygpKT87CiAgICAgICAg
+            IH0gZWxzZSBpZiBhcmcgPT0gIi0tZGlzYWJsZS1hbmFsb2ctc3RpY2stdGlsdC1jb250cm9scyIg
+            ewogICAgICAgICAgICAgc2VsZi5hbmFsb2dfc3RpY2tfdGlsdF9jb250cm9scyA9IGZhbHNlOwor
+            ICAgICAgICB9IGVsc2UgaWYgYXJnID09ICItLWRpc2FibGUtaXBhZC1hdXRvcm90YXRpb24tY29t
+            cGVuc2F0aW9uIiB7CisgICAgICAgICAgICBzZWxmLmlwYWRfYXV0b3JvdGF0aW9uX2NvbXBlbnNh
+            dGlvbiA9IGZhbHNlOwogICAgICAgICB9IGVsc2UgaWYgbGV0IFNvbWUodmFsdWUpID0gYXJnLnN0
+            cmlwX3ByZWZpeCgiLS1kZWFkem9uZT0iKSB7CiAgICAgICAgICAgICBzZWxmLmRlYWR6b25lID0g
+            cGFyc2VfZGVncmVlcyh2YWx1ZSwgImRlYWR6b25lIik/OwogICAgICAgICB9IGVsc2UgaWYgbGV0
+            IFNvbWUodmFsdWUpID0gYXJnLnN0cmlwX3ByZWZpeCgiLS14LXRpbHQtcmFuZ2U9IikgewpkaWZm
+            IC0tZ2l0IGEvdG91Y2hITEVfZGVmYXVsdF9vcHRpb25zLnR4dCBiL3RvdWNoSExFX2RlZmF1bHRf
+            b3B0aW9ucy50eHQKaW5kZXggNGM5NTU2M2YuLjZmNDE1MmFlIDEwMDY0NAotLS0gYS90b3VjaEhM
+            RV9kZWZhdWx0X29wdGlvbnMudHh0CisrKyBiL3RvdWNoSExFX2RlZmF1bHRfb3B0aW9ucy50eHQK
+            QEAgLTM0MSwzICszNDEsNiBAQCBjb20uZGlzbmV5LlN3YW1weUdhbWU6IC0tZGV2aWNlLWZhbWls
+            eT1pcGhvbmUtM2dzCiAjIGJsYWNrIHNjcmVlbi4gVGhlIGRpcmVjdCBwcmVzZW50ZXIgY29zdHMg
+            YSByZWFkYmFjayBldmVyeSBmcmFtZSwgc28gaXQgc3RheXMKICMgb3B0LWluIGFuZCBpcyBlbmFi
+            bGVkIHBlciBhcHAgaGVyZS4KIGNvbS5lYS5zaW1zbWVkaWV2YWwuYnY6IC0taW9zLWVzMi1kaXJl
+            Y3QtcHJlc2VudAorCisjIFRpbmtlckJveCBIRDogaVBhZCBsYW5kc2NhcGUgZ2FtZSB0aGF0IGFs
+            cmVhZHkgcHJlc2VudHMgdXByaWdodAorY29tLmF1dG9kZXNrLnRpbmtlcmJveDogLS1kaXNhYmxl
+            LWlwYWQtYXV0b3JvdGF0aW9uLWNvbXBlbnNhdGlvbgo=
+
+      - name: Show Xcode version
+        run: |
+          echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+          xcodebuild -version
+
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~3.29.0"
+
+      - name: Install Rust for iOS
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-ios
+
+      - name: Cache Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: vendor/boost
+          key: boost_1_81_0_macos
+
+      - name: Download Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o boost.tar.gz "https://archives.boost.io/release/1.81.0/source/boost_1_81_0.tar.gz"
+          mkdir -p vendor
+          tar xzf boost.tar.gz -C vendor
+          mv vendor/boost_1_81_0 vendor/boost
+
+      - name: Build SDL (must come first)
+        run: sh platform/ios/scripts/build-sdl-shared.sh iphoneos
+
+      - name: Build the app (the long step)
+        run: sh platform/ios/scripts/build-host.sh iphoneos Release
+
+      - name: Package the .ipa
+        run: |
+          sh platform/ios/scripts/package-ipa.sh
+          ls -la dist
+
+      - name: Upload the .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Applesauce-TinkerBox-IPA
+          path: dist/Applesauce-iOS-unsigned.ipa
+          if-no-files-found: error
