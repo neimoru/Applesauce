@@ -932,6 +932,23 @@ impl Fs {
         Some((parent, final_component.to_string()))
     }
 
+    /// Makes the app's container directory (the parent of the app bundle,
+    /// Documents, Library and tmp) read-only, as it is on iOS. Its existing
+    /// children, including the writeable Documents, Library and tmp, are
+    /// unaffected; only creating new entries directly inside it is refused.
+    pub fn make_app_container_read_only(&mut self) {
+        let home_directory = self.home_directory.clone();
+        let Some((parent, name)) = self.lookup_parent_node(&home_directory) else {
+            return;
+        };
+        let FsNode::Directory { children, .. } = parent else {
+            return;
+        };
+        if let Some(FsNode::Directory { writeable, .. }) = children.get_mut(&name) {
+            *writeable = None;
+        }
+    }
+
     /// Like [Path::exists] but for the guest filesystem.
     pub fn exists(&self, path: &GuestPath) -> bool {
         self.lookup_node(path).is_some()

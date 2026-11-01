@@ -95,6 +95,13 @@ Game controller options:
         need that rotation, but some (e.g. TinkerBox HD) already draw
         upright and are presented upside-down with it.
 
+    --read-only-app-container
+        Makes the app's container directory (the parent of Documents, Library
+        and tmp) read-only, as it is on iOS. touchHLE normally lets apps create
+        entries there because some engines need it, but other apps (e.g.
+        TinkerBox HD) treat a successful creation as a sign that data has been
+        installed there and ignore the copy in their bundle.
+
     --disable-analog-stick-tilt-controls
         Disables mapping of analog stick input to simulated rotation of the
         device.

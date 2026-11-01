@@ -69,6 +69,11 @@ pub struct Options {
     /// but some (e.g. TinkerBox HD) already present upright and are turned
     /// upside-down by it.
     pub ipad_autorotation_compensation: bool,
+    /// Whether the app's container directory (the parent of Documents,
+    /// Library and tmp) is read-only, as it is on iOS. By default it is
+    /// writeable, because some apps (notably Unity/Mono games) create hidden
+    /// directories there.
+    pub read_only_app_container: bool,
     pub x_tilt_range: f32,
     pub y_tilt_range: f32,
     pub x_tilt_offset: f32,
@@ -149,6 +154,7 @@ impl Default for Options {
             scale_hack: NonZeroU32::new(1).unwrap(),
             analog_stick_tilt_controls: true,
             ipad_autorotation_compensation: true,
+            read_only_app_container: false,
             deadzone: 0.1,
             x_tilt_range: 60.0,
             y_tilt_range: 60.0,
@@ -254,6 +260,8 @@ impl Options {
             self.analog_stick_tilt_controls = false;
         } else if arg == "--disable-ipad-autorotation-compensation" {
             self.ipad_autorotation_compensation = false;
+        } else if arg == "--read-only-app-container" {
+            self.read_only_app_container = true;
         } else if let Some(value) = arg.strip_prefix("--deadzone=") {
             self.deadzone = parse_degrees(value, "deadzone")?;
         } else if let Some(value) = arg.strip_prefix("--x-tilt-range=") {

@@ -491,6 +491,11 @@ pub fn main<T: Iterator<Item = String>>(mut args: T) -> Result<(), String> {
         assert!(parse_result == Ok(true));
     }
 
+    let mut fs = fs;
+    if options.read_only_app_container {
+        fs.make_app_container_read_only();
+    }
+
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Environment::new(bundle, fs, options.clone(), app_args.unwrap_or_default())
     }));

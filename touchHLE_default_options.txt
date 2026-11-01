@@ -342,5 +342,8 @@ com.disney.SwampyGame: --device-family=iphone-3gs
 # opt-in and is enabled per app here.
 com.ea.simsmedieval.bv: --ios-es2-direct-present
 
-# TinkerBox HD: iPad landscape game that already presents upright
-com.autodesk.tinkerbox: --disable-ipad-autorotation-compensation
+# TinkerBox HD: iPad landscape game that already presents upright. It also
+# tries to create <container>/Examples and, if that succeeds, lists that (empty)
+# folder instead of the presets bundled in the app, so keep the container
+# read-only as on iOS.
+com.autodesk.tinkerbox: --disable-ipad-autorotation-compensation --read-only-app-container

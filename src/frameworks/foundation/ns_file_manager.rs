@@ -706,7 +706,10 @@ pub const CLASSES: ClassExports = objc_classes! {
             // писать в свой Read-Only бандл (частая ошибка в старых играх
             // Gameloft),
             // перехватываем эту ошибку VFS, чтобы избежать краша.
-            if let FsError::ReadonlyParentDir = err {
+            // Apps that opted into an iOS-accurate read-only container get the
+            // real failure: TinkerBox HD, for one, only uses the bundled
+            // presets when it cannot create <container>/Examples.
+            if matches!(err, FsError::ReadonlyParentDir) && !env.options.read_only_app_container {
                 log!("Warning: createDirectoryAtPath {} intercepted ReadonlyParentDir, pretending success", path_str);
                 return true;
             }
