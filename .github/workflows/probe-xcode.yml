@@ -1,0 +1,19 @@
+name: Probe Xcode versions
+on:
+  push:
+    branches: [tinkerbox-build]
+    paths: [.github/workflows/probe-xcode.yml]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [macos-26, xcode-27, macos-27]
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 10
+    steps:
+      - run: |
+          sw_vers
+          ls -d /Applications/Xcode* || true
+          xcode-select -p
+          for x in /Applications/Xcode*.app; do echo "== $x"; DEVELOPER_DIR="$x/Contents/Developer" xcodebuild -version 2>&1 | head -2; DEVELOPER_DIR="$x/Contents/Developer" xcodebuild -showsdks 2>&1 | grep -i iphoneos; done
