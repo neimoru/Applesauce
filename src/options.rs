@@ -64,6 +64,11 @@ pub struct Options {
     pub scale_hack: NonZeroU32,
     pub deadzone: f32,
     pub analog_stick_tilt_controls: bool,
+    /// Whether the extra iPad landscape auto-rotation compensation in the
+    /// direct EAGL presenter is applied. Most iPad landscape games need it,
+    /// but some (e.g. TinkerBox HD) already present upright and are turned
+    /// upside-down by it.
+    pub ipad_autorotation_compensation: bool,
     pub x_tilt_range: f32,
     pub y_tilt_range: f32,
     pub x_tilt_offset: f32,
@@ -143,6 +148,7 @@ impl Default for Options {
             ios_es2_direct_present: false,
             scale_hack: NonZeroU32::new(1).unwrap(),
             analog_stick_tilt_controls: true,
+            ipad_autorotation_compensation: true,
             deadzone: 0.1,
             x_tilt_range: 60.0,
             y_tilt_range: 60.0,
@@ -246,6 +252,8 @@ impl Options {
                 .map_err(|_| "Invalid scale hack factor".to_string())?;
         } else if arg == "--disable-analog-stick-tilt-controls" {
             self.analog_stick_tilt_controls = false;
+        } else if arg == "--disable-ipad-autorotation-compensation" {
+            self.ipad_autorotation_compensation = false;
         } else if let Some(value) = arg.strip_prefix("--deadzone=") {
             self.deadzone = parse_degrees(value, "deadzone")?;
         } else if let Some(value) = arg.strip_prefix("--x-tilt-range=") {

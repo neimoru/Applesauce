@@ -79,6 +79,12 @@ pub const CAPABILITIES: &[GLenum] = &[
 pub const UNSUPPORTED_CAPABILITIES: &[GLenum] = &[
     0x8620, // GL_VERTEX_PROGRAM_NV
     gl21::TEXTURE,
+    // Clip planes beyond GLES1's six. Desktop GL reports a higher
+    // GL_MAX_CLIP_PLANES, so engines that loop up to the reported maximum
+    // (e.g. Ogre3D) touch these. Tolerate them; desktop GL supports them.
+    // Native GLES1 hosts report 6 and never reach these.
+    0x3006, // GL_CLIP_PLANE6
+    0x3007, // GL_CLIP_PLANE7
 ];
 
 /// Subset of [CAPABILITIES] that is part of desktop OpenGL 2.1 but NOT part of
@@ -2464,7 +2470,17 @@ impl GLES for GLES1OnGL2<'_> {
                 || internalformat as GLenum == gl21::RGBA
                 || internalformat as GLenum == gl21::LUMINANCE
                 || internalformat as GLenum == gl21::LUMINANCE_ALPHA
+                || internalformat as GLenum == gl21::BGRA
         );
+        // APPLE_texture_format_BGRA8888 requires internalformat == format ==
+        // BGRA, but desktop GL only accepts BGRA as a format; the matching
+        // internal format is RGBA. (Native GLES1 hosts, e.g. iOS, don't need
+        // this: the driver accepts BGRA directly.)
+        let internalformat = if internalformat as GLenum == gl21::BGRA {
+            gl21::RGBA as GLint
+        } else {
+            internalformat
+        };
         assert!(border == 0);
         assert!(
             format == gl21::ALPHA

@@ -89,6 +89,12 @@ Game controller options:
 
         This is a floating-point (decimal) number between 0 and 1.
 
+    --disable-ipad-autorotation-compensation
+        Disables the extra 180-degree rotation applied to iPad apps in
+        landscape by the direct EAGL presenter. Most iPad landscape games
+        need that rotation, but some (e.g. TinkerBox HD) already draw
+        upright and are presented upside-down with it.
+
     --disable-analog-stick-tilt-controls
         Disables mapping of analog stick input to simulated rotation of the
         device.
