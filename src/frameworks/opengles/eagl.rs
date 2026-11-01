@@ -1818,7 +1818,14 @@ unsafe fn present_renderbuffer(env: &mut Environment, context: id) {
     // critical path of the frame, so spending a few hundred microseconds
     // ensuring correctness is fine. (And on lenient drivers glFinish on
     // an already-flushed pipeline is essentially free.)
-    gles.Finish();
+    //
+    // Not on iOS: Apple's OpenGL ES orders the copy after the draws that
+    // target the renderbuffer, so glFinish there only stalls the CPU until
+    // the GPU is idle every frame, which stops emulation and rendering from
+    // overlapping and gets much worse at higher render resolutions.
+    if !cfg!(target_os = "ios") {
+        gles.Finish();
+    }
     gles.CopyTexImage2D(
         gles11::TEXTURE_2D,
         0,
