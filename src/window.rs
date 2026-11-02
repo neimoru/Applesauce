@@ -632,8 +632,13 @@ impl Window {
             attr.set_context_version(1, 1);
             attr.set_context_profile(sdl2::video::GLProfile::GLES);
 
-            // Disable blocking of event loop when app is paused.
-            sdl2::hint::set("SDL_ANDROID_BLOCK_ON_PAUSE", "0");
+            // Block the event loop (and thus the emulated app) while the
+            // activity is in the background, and resume it afterwards, like
+            // iOS suspends the host app. SDL saves and restores the GL
+            // context around the pause. (Previously polling continued and
+            // the app was told to terminate, so switching away from it
+            // restarted it from scratch.)
+            sdl2::hint::set("SDL_ANDROID_BLOCK_ON_PAUSE", "1");
         }
 
         // Separate mouse and touch events in both SDL synthesis directions.
@@ -1191,8 +1196,8 @@ impl Window {
                     }
                 }
                 E::AppWillEnterBackground { .. } => {
-                    if cfg!(target_os = "ios") {
-                        log!("Received app-will-resign-active event; allowing iOS to suspend and resume the host.");
+                    if cfg!(any(target_os = "ios", target_os = "android")) {
+                        log!("Received app-will-resign-active event; allowing the OS to suspend and resume the host.");
                         continue;
                     }
                     log!("Received app-will-resign-active event.");

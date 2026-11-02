@@ -11,6 +11,7 @@ xcuserdata/
 /touchHLE_apps/*
 !/touchHLE_apps/README.txt
 touchHLE_log.txt
+touchHLE_log_previous.txt
 touchHLE_wallpaper.*
 *.ipa
 *.p12
