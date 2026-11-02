@@ -58,6 +58,12 @@ jobs:
         with:
           cmakeVersion: "~3.31.0"
 
+      - name: Install Java 17 (what this Gradle version supports)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install Rust for Android
         run: |
           rustup toolchain install stable --profile minimal
