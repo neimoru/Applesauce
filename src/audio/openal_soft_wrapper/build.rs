@@ -65,6 +65,7 @@ fn linux_has_lib(lib: &str) -> bool {
 
 fn main() {
     let os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS was not set");
+    let mut oboe_build_dir: Option<std::path::PathBuf> = None;
     if cfg!(feature = "static") {
         let package_root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = package_root.join("../../..");
@@ -87,6 +88,27 @@ fn main() {
         build.define("ALSOFT_NO_CONFIG_UTIL", "ON");
         build.define("ALSOFT_EXAMPLES", "OFF");
 
+        // On Android, OpenAL Soft's default OpenSL ES backend can have a lot
+        // of output latency on some devices. If the Oboe source is available
+        // (vendor/oboe, or TOUCHHLE_OBOE_SOURCE), build the Oboe backend,
+        // which OpenAL Soft prefers and which uses AAudio's low-latency mode.
+        println!("cargo:rerun-if-env-changed=TOUCHHLE_OBOE_SOURCE");
+        let oboe_source = if os.eq_ignore_ascii_case("android") {
+            env::var("TOUCHHLE_OBOE_SOURCE")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    let path = workspace_root.join("vendor/oboe");
+                    path.join("CMakeLists.txt").exists().then_some(path)
+                })
+        } else {
+            None
+        };
+        if let Some(oboe_source) = &oboe_source {
+            build.define("OBOE_SOURCE", oboe_source.canonicalize().unwrap());
+            build.define("ALSOFT_REQUIRE_OBOE", "ON");
+        }
+
         if os.eq_ignore_ascii_case("linux") {
             // Make Linux release builds actually include normal desktop audio.
             // Without these, OpenAL Soft can silently build with only sndio/oss/null/wave,
@@ -101,6 +123,9 @@ fn main() {
         }
 
         let openal_soft_out = build.build();
+        if oboe_source.is_some() {
+            oboe_build_dir = Some(openal_soft_out.join("build/oboe"));
+        }
 
         link_search(&openal_soft_out.join("lib"));
         // some Linux systems
@@ -139,6 +164,14 @@ fn main() {
     } else {
         "openal"
     });
+    // Oboe is built as a separate static library alongside OpenAL Soft (see
+    // above) and has to come after it on the linker command line.
+    if let Some(oboe_build_dir) = oboe_build_dir {
+        link_search(&oboe_build_dir);
+        println!("cargo:rustc-link-lib=static=oboe");
+        println!("cargo:rustc-link-lib=dylib=log");
+        println!("cargo:rustc-link-lib=dylib=OpenSLES");
+    }
     // rerun-if-changed seems to not work if pointed to a directory :(
     //rerun_if_changed(&workspace_root.join("vendor/openal-soft"));
 }

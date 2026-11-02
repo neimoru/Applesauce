@@ -103,6 +103,9 @@ jobs:
           ln -sfn "$PWD/android-ndk/android-ndk-r25c" "$ANDROID_SDK_ROOT/ndk/25.2.9519653"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
 
+      - name: Download Oboe (low-latency Android audio)
+        run: git clone -q --depth 1 -b 1.9.3 https://github.com/google/oboe "$RUNNER_TEMP/oboe"
+
       - name: Build the APK (the long step)
         run: |
           cd android
@@ -111,6 +114,7 @@ jobs:
             -PtouchHLEAppId=com.neimoru.tinkerbox
         env:
           ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/25.2.9519653
+          TOUCHHLE_OBOE_SOURCE: ${{ runner.temp }}/oboe
 
       - name: Collect the APK and signing tools
         run: |
