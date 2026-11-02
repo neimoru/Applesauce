@@ -1293,11 +1293,12 @@ pub fn render_audio_unit(env: &mut Environment, audio_unit: AudioUnit) {
         if underrun && gap < MAX_TRACKED_GAP_SECONDS {
             state.underruns_since_log += 1;
         }
-        if state.underruns_since_log > 0
-            && state
-                .last_log
-                .is_none_or(|t| now.duration_since(t).as_secs_f64() >= 10.0)
-        {
+        // Report underruns at most every 10s, and the current latency every
+        // 60s even without underruns, so both can be diagnosed from the log.
+        let since_log = state
+            .last_log
+            .map_or(f64::INFINITY, |t| now.duration_since(t).as_secs_f64());
+        if (state.underruns_since_log > 0 && since_log >= 10.0) || since_log >= 60.0 {
             log!(
                 "Audio: {} underrun(s) since last report; longest gap between audio updates {:.0}ms; now buffering {:.0}ms ahead",
                 state.underruns_since_log,

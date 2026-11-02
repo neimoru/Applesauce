@@ -406,7 +406,15 @@ impl Options {
 /// Returns [Ok] if there is no error when reading the file, otherwise [Err].
 /// The [Ok] value is a [Some] with the options if they could be found, or
 /// [None] if no options were found for this app.
+/// Get the options for an app from an options file. A line's app ID can be
+/// suffixed with `@` and an OS name (as in [std::env::consts::OS], e.g.
+/// `com.example.app@android`) to only apply on that OS; such options are
+/// added after those from the first plain line for the app.
 pub fn get_options_from_file<F: Read>(file: F, app_id: &str) -> Result<Option<String>, String> {
+    let platform_app_id = format!("{}@{}", app_id, std::env::consts::OS);
+    let mut generic: Option<String> = None;
+    let mut found_generic = false;
+    let mut platform: Option<String> = None;
     let file = BufReader::new(file);
     for (line_no, line) in BufRead::lines(file).enumerate() {
         // Line numbering usually starts from 1
@@ -429,19 +437,20 @@ pub fn get_options_from_file<F: Read>(file: F, app_id: &str) -> Result<Option<St
 
         let (line_app_id, line_options) = line.split_once(':').ok_or_else(|| format!("Line {line_no} is not a comment and is missing a colon (:) to separate the app ID from the options"))?;
         let line_app_id = line_app_id.trim();
-
-        if line_app_id != app_id {
-            continue;
-        }
-
         let line_options = line_options.trim();
-        if line_options.is_empty() {
-            return Ok(None);
-        } else {
-            return Ok(Some(line_options.to_string()));
+        let line_options = (!line_options.is_empty()).then(|| line_options.to_string());
+
+        if line_app_id == app_id && !found_generic {
+            found_generic = true;
+            generic = line_options;
+        } else if line_app_id == platform_app_id && platform.is_none() {
+            platform = line_options;
         }
     }
-    Ok(None)
+    Ok(match (generic, platform) {
+        (Some(generic), Some(platform)) => Some(format!("{generic} {platform}")),
+        (generic, platform) => generic.or(platform),
+    })
 }
 
 #[derive(Default, Clone)]
