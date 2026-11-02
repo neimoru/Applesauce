@@ -37,10 +37,16 @@ android {
     compileSdkVersion 35
     defaultConfig {
         def branding = getTouchHLEBranding()
-        applicationId 'org.touchhle.android'
-        applicationIdSuffix(branding.isEmpty() ? null : branding.toLowerCase())
-        resValue 'string', 'app_name', join('touchHLE', ' ', branding)
-        buildConfigField 'String', 'APP_NAME', ('"' + join('touchHLE', ' ', branding) + '"')
+        // Optional overrides, e.g. for a package that bundles a single app
+        // (see BUNDLED_APP_FILE in src/paths.rs):
+        //   gradle assembleRelease -PtouchHLEAppName='My Game' -PtouchHLEAppId=com.example.mygame
+        def customAppName = project.findProperty('touchHLEAppName')
+        def customAppId = project.findProperty('touchHLEAppId')
+        def appName = customAppName ?: join('touchHLE', ' ', branding)
+        applicationId(customAppId ?: 'org.touchhle.android')
+        applicationIdSuffix((customAppId || branding.isEmpty()) ? null : branding.toLowerCase())
+        resValue 'string', 'app_name', appName
+        buildConfigField 'String', 'APP_NAME', ('"' + appName + '"')
         manifestPlaceholders = [
                 icon: join('@drawable/icon', '_', branding.toLowerCase())
         ]

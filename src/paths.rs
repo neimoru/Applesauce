@@ -271,3 +271,46 @@ pub fn prepopulate_user_data_dir() {
         create_file(&options_help, crate::options::OPTIONS_HELP);
     }
 }
+
+/// Name of an app bundled together with touchHLE as a resource. If present,
+/// it is launched directly instead of showing the app picker, so that a
+/// single package can contain both touchHLE and one app.
+pub const BUNDLED_APP_FILE: &str = "touchHLE_bundled_app.ipa";
+
+/// If an app is bundled with touchHLE (see [BUNDLED_APP_FILE]), return a host
+/// path to it that can be opened as an ordinary file.
+pub fn bundled_app_path() -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        // Android assets are not ordinary files, so the app is copied out of
+        // the APK into the user data directory. The copy is refreshed if the
+        // size differs, e.g. after the APK was updated.
+        let mut resource = ResourceFile::open(BUNDLED_APP_FILE).ok()?;
+        let reader = resource.get();
+        let size = reader.seek(std::io::SeekFrom::End(0)).ok()?;
+        reader.seek(std::io::SeekFrom::Start(0)).ok()?;
+        let path = user_data_base_path().join(BUNDLED_APP_FILE);
+        if std::fs::metadata(&path).map(|m| m.len()).ok() != Some(size) {
+            log!("Extracting bundled app to {}", path.display());
+            let tmp_path = path.with_extension("ipa.tmp");
+            let result = std::fs::File::create(&tmp_path)
+                .and_then(|mut file| std::io::copy(reader, &mut file))
+                .and_then(|_| std::fs::rename(&tmp_path, &path));
+            if let Err(e) = result {
+                log!("Warning: Couldn't extract bundled app: {}", e);
+                let _ = std::fs::remove_file(&tmp_path);
+                return None;
+            }
+        }
+        Some(path)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let base_path = get_bundled_resources_path();
+        let path = base_path
+            .as_deref()
+            .unwrap_or(Path::new("."))
+            .join(BUNDLED_APP_FILE);
+        path.is_file().then_some(path)
+    }
+}

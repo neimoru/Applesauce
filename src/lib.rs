@@ -261,6 +261,9 @@ pub fn main<T: Iterator<Item = String>>(mut args: T) -> Result<(), String> {
 
     let bundle_path = if let Some(bundle_path) = bundle_path {
         bundle_path
+    } else if let Some(bundle_path) = paths::bundled_app_path() {
+        echo!("Launching bundled app: {}", bundle_path.display());
+        bundle_path
     } else {
         let mut options = options::Options::default();
         // Apply command-line options only (no app-specific options apply)
