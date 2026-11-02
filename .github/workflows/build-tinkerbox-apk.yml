@@ -76,7 +76,7 @@ jobs:
         if: steps.cache-gradle.outputs.cache-hit != 'true'
         run: |
           curl -fL -o gradle.zip "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip"
-          7z -ogradle x gradle.zip
+          mkdir -p gradle && unzip -q gradle.zip -d gradle
 
       - name: Cache Android NDK
         id: cache-ndk
@@ -89,7 +89,7 @@ jobs:
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           curl -fL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
-          7z -oandroid-ndk -snld x ndk.zip
+          mkdir -p android-ndk && unzip -q ndk.zip -d android-ndk
 
       - name: Set up Android NDK
         run: |
