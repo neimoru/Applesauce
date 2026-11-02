@@ -107,6 +107,9 @@ fn main() {
         if let Some(oboe_source) = &oboe_source {
             build.define("OBOE_SOURCE", oboe_source.canonicalize().unwrap());
             build.define("ALSOFT_REQUIRE_OBOE", "ON");
+            // OpenAL's CMake export can't include the oboe target, so skip
+            // installing the library and link it from the build dir instead.
+            build.define("ALSOFT_INSTALL", "OFF");
         }
 
         if os.eq_ignore_ascii_case("linux") {
@@ -124,6 +127,7 @@ fn main() {
 
         let openal_soft_out = build.build();
         if oboe_source.is_some() {
+            link_search(&openal_soft_out.join("build"));
             oboe_build_dir = Some(openal_soft_out.join("build/oboe"));
         }
 
