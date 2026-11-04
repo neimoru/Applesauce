@@ -356,5 +356,7 @@ com.autodesk.tinkerbox: --disable-ipad-autorotation-compensation --read-only-app
 com.autodesk.tinkerbox@android: --fix-texture-min-filter
 
 # Road Warrior (Mobjoy, Unity 3.5): universal app; the iPad layout is sharper
-# on large screens.
-com.mobjoy.3r: --device-family=ipad
+# on large screens. Like The Sims Medieval it presents an OpenGL ES 2.0
+# renderbuffer from a layer that is not the fullscreen layer, which shows a
+# black screen on iOS without the direct presenter.
+com.mobjoy.3r: --device-family=ipad --ios-es2-direct-present
