@@ -274,12 +274,67 @@ fn dispatch_release(_env: &mut Environment, _obj: MutVoidPtr) {
 // MARK: - Dispatch async / sync
 
 fn dispatch_async(env: &mut Environment, queue: dispatch_queue_t, block: dispatch_block_t) {
-    log_dbg!("dispatch_async: calling block immediately (single-threaded)");
-    if !block.is_null() {
-        get_state(env).current_queue_stack.push(queue.to_bits());
-        call_void_block(env, block);
-        get_state(env).current_queue_stack.pop();
+    if block.is_null() {
+        return;
     }
+    if queue.to_bits() == GLOBAL_QUEUE_PTR {
+        // Work submitted to a global (concurrent, background) queue can
+        // legitimately never finish, e.g. a block that runs
+        // `[[NSRunLoop currentRunLoop] run]` to service a networking
+        // library's timers (Vungle's SDK does this). Running it inline on
+        // the caller's thread would then hang the caller forever (observed:
+        // Unity's main loop never started in Road Warrior). So run it on a
+        // new guest thread, like libdispatch would run it on a worker thread.
+        let heap_block = copy_block_to_heap(env, block);
+        let invoke_ptr: u32 = env.mem.read(heap_block.cast::<u32>() + 3u32);
+        if invoke_ptr == 0 {
+            return;
+        }
+        let invoke = GuestFunction::from_addr_with_thumb_bit(invoke_ptr);
+        let thread_id = env.new_thread(
+            invoke,
+            heap_block,
+            crate::mem::Mem::SECONDARY_THREAD_DEFAULT_STACK_SIZE,
+        );
+        log_dbg!("dispatch_async: global queue block {:?} on new thread {}", heap_block, thread_id);
+        return;
+    }
+    log_dbg!("dispatch_async: calling block immediately (single-threaded)");
+    get_state(env).current_queue_stack.push(queue.to_bits());
+    call_void_block(env, block);
+    get_state(env).current_queue_stack.pop();
+}
+
+/// Copy a block literal to the heap (like `_Block_copy`), so it stays valid
+/// after the function that created it on the stack has returned. Global
+/// blocks are returned as-is.
+fn copy_block_to_heap(env: &mut Environment, block: dispatch_block_t) -> MutVoidPtr {
+    const BLOCK_HAS_COPY_DISPOSE: u32 = 1 << 25;
+    const BLOCK_IS_GLOBAL: u32 = 1 << 28;
+    let words = block.cast::<u32>();
+    let flags: u32 = env.mem.read(words + 1u32);
+    if flags & BLOCK_IS_GLOBAL != 0 {
+        return block;
+    }
+    let descriptor: u32 = env.mem.read(words + 4u32);
+    if descriptor == 0 {
+        return block;
+    }
+    let descriptor = MutPtr::<u32>::from_bits(descriptor);
+    let size: u32 = env.mem.read(descriptor + 1u32);
+    if size < 20 {
+        return block;
+    }
+    let copy = env.mem.alloc(size);
+    env.mem.memmove(copy, block.cast_const(), size);
+    if flags & BLOCK_HAS_COPY_DISPOSE != 0 {
+        let copy_helper: u32 = env.mem.read(descriptor + 2u32);
+        if copy_helper != 0 {
+            let copy_helper = GuestFunction::from_addr_with_thumb_bit(copy_helper);
+            let _: () = copy_helper.call_from_host(env, (copy, block.cast_const()));
+        }
+    }
+    copy
 }
 
 fn dispatch_sync(env: &mut Environment, queue: dispatch_queue_t, block: dispatch_block_t) {
@@ -293,13 +348,19 @@ fn dispatch_sync(env: &mut Environment, queue: dispatch_queue_t, block: dispatch
 
 fn dispatch_async_f(
     env: &mut Environment,
-    _queue: dispatch_queue_t,
+    queue: dispatch_queue_t,
     context: MutVoidPtr,
     work: GuestFunction,
 ) {
-    if work != GuestFunction::null_ptr() {
-        let _: () = work.call_from_host(env, (context,));
+    if work == GuestFunction::null_ptr() {
+        return;
     }
+    if queue.to_bits() == GLOBAL_QUEUE_PTR {
+        // See dispatch_async.
+        env.new_thread(work, context, crate::mem::Mem::SECONDARY_THREAD_DEFAULT_STACK_SIZE);
+        return;
+    }
+    let _: () = work.call_from_host(env, (context,));
 }
 
 fn dispatch_sync_f(

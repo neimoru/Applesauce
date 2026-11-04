@@ -697,6 +697,12 @@ impl GLES for GLES2Native<'_> {
         }
         gles2::TexParameteriv(target, pname, params)
     }
+    unsafe fn GetTexParameteriv(&mut self, target: GLenum, pname: GLenum, params: *mut GLint) {
+        gles2::GetTexParameteriv(target, pname, params)
+    }
+    unsafe fn GetTexParameterfv(&mut self, target: GLenum, pname: GLenum, params: *mut GLfloat) {
+        gles2::GetTexParameterfv(target, pname, params)
+    }
     unsafe fn TexParameterfv(&mut self, target: GLenum, pname: GLenum, params: *const GLfloat) {
         if pname == gles11::GENERATE_MIPMAP {
             if !params.is_null() && *params != 0.0 {

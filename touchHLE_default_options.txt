@@ -354,3 +354,7 @@ com.autodesk.tinkerbox: --disable-ipad-autorotation-compensation --read-only-app
 # On Android (Qualcomm Adreno's OpenGL ES 1.1 driver), TinkerBox's mipmapped
 # textures are sampled as black; sample only the full-size level instead.
 com.autodesk.tinkerbox@android: --fix-texture-min-filter
+
+# Road Warrior (Mobjoy, Unity 3.5): universal app; the iPad layout is sharper
+# on large screens.
+com.mobjoy.3r: --device-family=ipad
