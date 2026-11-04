@@ -1048,8 +1048,8 @@ fn path_for_resource_helper(
     let data_path_exists: bool = msg![env; file_manager fileExistsAtPath:data_path];
     log!(
         "NSBundle resource lookup: {:?} missing, Unity Data fallback {:?} exists={}",
-        path,
-        data_path,
+        ns_string::to_rust_string(env, path),
+        ns_string::to_rust_string(env, data_path),
         data_path_exists
     );
     if data_path_exists {

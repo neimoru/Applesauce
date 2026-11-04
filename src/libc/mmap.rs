@@ -16,6 +16,7 @@ use std::collections::HashMap;
 #[allow(dead_code)]
 const MAP_FILE: i32 = 0x0000;
 const MAP_ANON: i32 = 0x1000;
+const MAP_FIXED: i32 = 0x0010;
 
 #[derive(Default)]
 pub struct State {
@@ -45,6 +46,36 @@ fn mmap(
         fd,
         offset
     );
+
+    // `MAP_FIXED | MAP_ANON` over part of a mapping we already handed out:
+    // the kernel replaces those pages with fresh zero-filled ones at the
+    // same address. Boehm GC (used by Mono, i.e. Unity) relies on this to
+    // release and later reuse heap blocks
+    // (`mmap(start, len, PROT_NONE, MAP_FIXED|MAP_ANON, ...)`) and aborts
+    // with "mmap(...PROT_NONE...) failed" if it gets any other address back.
+    // touchHLE doesn't enforce page protections, so zeroing the range in
+    // place is equivalent.
+    if (flags & MAP_FIXED) != 0 && (flags & MAP_ANON) != 0 && !addr.is_null() && len != 0 {
+        let start = addr.to_bits();
+        let end = start.checked_add(len);
+        let inside_existing_mapping = end.is_some_and(|end| {
+            env.libc_state.mmap.allocations.iter().any(|(&base, &base_len)| {
+                let base = base.to_bits();
+                start >= base && end <= base.saturating_add(base_len)
+            })
+        });
+        if inside_existing_mapping {
+            log_dbg!("mmap MAP_FIXED within existing mapping: zeroing {:?}+{:#x}", addr, len);
+            env.mem.bytes_at_mut(addr.cast(), len).fill(0);
+            return addr;
+        }
+        log!(
+            "Warning: mmap MAP_FIXED at {:?} (len {:#x}) outside any known mapping; \
+             allocating elsewhere instead",
+            addr,
+            len
+        );
+    }
 
     // TODO: use vm_allocate() instead
     let ptr = env.mem.calloc(len);
