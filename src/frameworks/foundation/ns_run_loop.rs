@@ -443,6 +443,11 @@ pub fn run_run_loop(
         tick_system_sound_completions(env);
 
         if is_main_run_loop {
+            let next_due = crate::libc::dispatch::handle_dispatch_after(env);
+            limit_sleep_time(&mut sleep_until, next_due);
+        }
+
+        if is_main_run_loop {
             media_player::handle_players(env);
         }
 

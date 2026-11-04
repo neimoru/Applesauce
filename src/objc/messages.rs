@@ -145,21 +145,33 @@ fn objc_msgSend_inner(
     // (each `objc_msgSend_inner` host frame is several KB once Rust adds
     // local variables, log!() temporaries, and the dispatch trampoline).
     const MAX_DEPTH: usize = 128;
+    // The depth is tracked per guest thread: all guest threads run on the
+    // same host thread, and a guest thread that is suspended in the middle
+    // of a long-running message (e.g. a background thread sitting in
+    // `-[NSRunLoop run]`) must not eat into other threads' budget.
     thread_local! {
-        static DISPATCH_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static DISPATCH_DEPTH: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
     }
+    let guest_thread = env.current_thread;
     let depth = DISPATCH_DEPTH.with(|d| {
-        let new = d.get() + 1;
-        d.set(new);
-        new
+        let mut d = d.borrow_mut();
+        if d.len() <= guest_thread {
+            d.resize(guest_thread + 1, 0);
+        }
+        d[guest_thread] += 1;
+        d[guest_thread]
     });
-    struct DepthGuard;
+    struct DepthGuard(usize);
     impl Drop for DepthGuard {
         fn drop(&mut self) {
-            DISPATCH_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+            DISPATCH_DEPTH.with(|d| {
+                if let Some(depth) = d.borrow_mut().get_mut(self.0) {
+                    *depth = depth.saturating_sub(1);
+                }
+            });
         }
     }
-    let _guard = DepthGuard;
+    let _guard = DepthGuard(guest_thread);
     if depth > MAX_DEPTH {
         let sel_name = selector.as_str(&env.mem).to_string();
 

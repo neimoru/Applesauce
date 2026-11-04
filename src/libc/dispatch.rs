@@ -112,6 +112,16 @@ pub struct State {
     /// `dispatch_get_specific` can resolve against the running queue. The
     /// main queue is assumed when the stack is empty.
     current_queue_stack: Vec<u32>,
+    /// Work scheduled with `dispatch_after`/`dispatch_after_f`, run by
+    /// [handle_dispatch_after] from the main run loop once due.
+    pending_after: Vec<PendingAfter>,
+}
+
+struct PendingAfter {
+    due: std::time::Instant,
+    queue: u32,
+    work: GuestFunction,
+    context: MutVoidPtr,
 }
 
 fn get_state(env: &mut Environment) -> &mut State {
@@ -412,28 +422,97 @@ fn dispatch_apply_f(
 
 // MARK: - dispatch_after
 
+/// Convert a `dispatch_time_t` to a delay from now. touchHLE's
+/// [dispatch_time] treats `DISPATCH_TIME_NOW` as 0, so values are
+/// nanoseconds from now.
+fn dispatch_time_to_delay(when: u64) -> Option<std::time::Duration> {
+    if when == DISPATCH_TIME_FOREVER {
+        return None;
+    }
+    // Anything absurdly far away (e.g. an absolute host timestamp) is
+    // treated as "now" rather than never.
+    let nanos = if when > 86_400 * 1_000_000_000 { 0 } else { when };
+    Some(std::time::Duration::from_nanos(nanos))
+}
+
+fn schedule_after(
+    env: &mut Environment,
+    when: u64,
+    queue: dispatch_queue_t,
+    work: GuestFunction,
+    context: MutVoidPtr,
+) {
+    let Some(delay) = dispatch_time_to_delay(when) else {
+        return;
+    };
+    log_dbg!("dispatch_after: scheduling {:?} in {:?}", work, delay);
+    get_state(env).pending_after.push(PendingAfter {
+        due: std::time::Instant::now() + delay,
+        queue: queue.to_bits(),
+        work,
+        context,
+    });
+}
+
+/// `dispatch_after` runs the block once `when` has passed. Running it
+/// immediately (as touchHLE used to) turns the common "do this again in a
+/// few seconds" pattern into unbounded recursion (observed: Kamcord's disk
+/// space checker in Road Warrior).
 fn dispatch_after(
     env: &mut Environment,
-    _when: u64, // dispatch_time_t
-    _queue: dispatch_queue_t,
+    when: u64, // dispatch_time_t
+    queue: dispatch_queue_t,
     block: dispatch_block_t,
 ) {
-    log_dbg!("dispatch_after: calling block immediately (timer not supported)");
-    if !block.is_null() {
-        call_void_block(env, block);
+    if block.is_null() {
+        return;
     }
+    let heap_block = copy_block_to_heap(env, block);
+    let invoke_ptr: u32 = env.mem.read(heap_block.cast::<u32>() + 3u32);
+    if invoke_ptr == 0 {
+        return;
+    }
+    let invoke = GuestFunction::from_addr_with_thumb_bit(invoke_ptr);
+    schedule_after(env, when, queue, invoke, heap_block);
 }
 
 fn dispatch_after_f(
     env: &mut Environment,
-    _when: u64,
-    _queue: dispatch_queue_t,
+    when: u64,
+    queue: dispatch_queue_t,
     context: MutVoidPtr,
     work: GuestFunction,
 ) {
     if work != GuestFunction::null_ptr() {
-        let _: () = work.call_from_host(env, (context,));
+        schedule_after(env, when, queue, work, context);
     }
+}
+
+/// Run any `dispatch_after` work that is due. Called from the main run loop;
+/// returns when the next pending work is due, if any.
+pub fn handle_dispatch_after(env: &mut Environment) -> Option<std::time::Instant> {
+    if get_state(env).pending_after.is_empty() {
+        return None;
+    }
+    let now = std::time::Instant::now();
+    let (due, pending): (Vec<_>, Vec<_>) = std::mem::take(&mut get_state(env).pending_after)
+        .into_iter()
+        .partition(|p| p.due <= now);
+    get_state(env).pending_after = pending;
+    for p in due {
+        if p.queue == GLOBAL_QUEUE_PTR {
+            env.new_thread(
+                p.work,
+                p.context,
+                crate::mem::Mem::SECONDARY_THREAD_DEFAULT_STACK_SIZE,
+            );
+        } else {
+            get_state(env).current_queue_stack.push(p.queue);
+            let _: () = p.work.call_from_host(env, (p.context,));
+            get_state(env).current_queue_stack.pop();
+        }
+    }
+    get_state(env).pending_after.iter().map(|p| p.due).min()
 }
 
 // MARK: - dispatch_time
