@@ -128,7 +128,23 @@ const kAudioFilePropertyMagicCookieData: AudioFilePropertyID = fourcc(b"mgic");
 const kAudioFilePropertyChannelLayout: AudioFilePropertyID = fourcc(b"cmap");
 const kAudioFilePropertyEstimatedDuration: AudioFilePropertyID = fourcc(b"edur");
 const kAudioFilePropertyPacketTableInfo: AudioFilePropertyID = fourcc(b"pnfo");
+// Note: the real kAudioFilePropertyPacketToFrame is 'pkfr' (handled together
+// with kAudioFilePropertyFrameToPacket in AudioFileGetProperty). The 'flst'
+// constant below is kept for its previous behaviour (frames per packet).
 const kAudioFilePropertyPacketToFrame: AudioFilePropertyID = fourcc(b"flst");
+const kAudioFilePropertyPacketToFrameTranslation: AudioFilePropertyID = fourcc(b"pkfr");
+const kAudioFilePropertyFrameToPacket: AudioFilePropertyID = fourcc(b"frpk");
+
+/// `AudioFramePacketTranslation` from `AudioFile.h`. On 32-bit ARM, 64-bit
+/// integers only need 4-byte alignment, so this is 20 bytes.
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+struct AudioFramePacketTranslation {
+    frame: i64,
+    packet: i64,
+    frame_offset_in_packet: u32,
+}
+unsafe impl SafeRead for AudioFramePacketTranslation {}
 pub const kAudioFilePropertyFileFormat: AudioFilePropertyID = fourcc(b"ffmt");
 
 const MAX_PACKET_SIZE_UPPER_BOUND: u32 = 65536;
@@ -918,6 +934,9 @@ pub(super) fn property_size(property_id: AudioFilePropertyID) -> GuestUSize {
         kAudioFilePropertyPacketTableInfo => guest_size_of::<AudioFilePacketTableInfo>(),
         kAudioFilePropertyPacketToFrame => guest_size_of::<f64>(),
         kAudioFilePropertyFileFormat => guest_size_of::<AudioFileTypeID>(),
+        kAudioFilePropertyFrameToPacket | kAudioFilePropertyPacketToFrameTranslation => {
+            guest_size_of::<AudioFramePacketTranslation>()
+        }
         _ => 0,
     }
 }
@@ -989,6 +1008,36 @@ pub fn AudioFileGetProperty(
 
     env.mem.write(io_data_size, required_size);
     if out_property_data.is_null() {
+        return kAudioFileSuccess;
+    }
+
+    if in_property_id == kAudioFilePropertyFrameToPacket
+        || in_property_id == kAudioFilePropertyPacketToFrameTranslation
+    {
+        let frames_per_packet = match State::get(&mut env.framework_state)
+            .audio_files
+            .get(&in_audio_file)
+        {
+            Some(AudioFileHostObject::Real(audio_file)) => {
+                audio_file.audio_description().frames_per_packet
+            }
+            Some(AudioFileHostObject::Dummy { format, .. })
+            | Some(AudioFileHostObject::Writable { format, .. }) => format.frames_per_packet,
+            None => return kAudioFileNotOpenError,
+        }
+        .max(1) as i64;
+        let ptr = out_property_data.cast::<AudioFramePacketTranslation>();
+        let mut translation = env.mem.read(ptr);
+        if in_property_id == kAudioFilePropertyFrameToPacket {
+            let frame = translation.frame;
+            translation.packet = frame / frames_per_packet;
+            translation.frame_offset_in_packet = (frame % frames_per_packet) as u32;
+        } else {
+            let packet = translation.packet;
+            translation.frame = packet * frames_per_packet;
+            translation.frame_offset_in_packet = 0;
+        }
+        env.mem.write(ptr, translation);
         return kAudioFileSuccess;
     }
 
