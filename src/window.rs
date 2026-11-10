@@ -1808,6 +1808,7 @@ impl Window {
             gl_ctx.DeleteTextures(1, &texture);
         };
 
+        self.show_current_gl_context_view();
         self.window.gl_swap_window();
 
         // hold onto GL context so the image doesn't disappear, and hold
@@ -1817,8 +1818,52 @@ impl Window {
     /// Swap front-buffer and back-buffer so the result of OpenGL rendering is
     /// presented.
     pub fn swap_window(&self) {
+        self.show_current_gl_context_view();
         self.window.gl_swap_window();
     }
+
+    /// On iOS, SDL gives every OpenGL ES context its own view, and creating a
+    /// context puts its view in front. An app that makes a second context
+    /// (e.g. cocos2d's background texture loader) would therefore hide the
+    /// view of the context it actually presents with, leaving a black screen.
+    /// So before presenting, make sure the current context's view is the one
+    /// on screen.
+    #[cfg(target_os = "ios")]
+    fn show_current_gl_context_view(&self) {
+        use std::ffi::{c_char, c_void};
+        extern "C" {
+            fn sel_registerName(name: *const c_char) -> *const c_void;
+            fn objc_msgSend();
+        }
+        type Send0 = unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void;
+        type Send1 = unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void) -> *mut c_void;
+        unsafe {
+            let context = sdl2::sys::SDL_GL_GetCurrentContext() as *mut c_void;
+            if context.is_null() {
+                return;
+            }
+            let send0: Send0 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let send1: Send1 = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            // SDLEAGLContext.sdlView (an SDL_uikitopenglview)
+            let view = send0(context, sel_registerName(c"sdlView".as_ptr()));
+            if view.is_null() {
+                return;
+            }
+            let superview = send0(view, sel_registerName(c"superview".as_ptr()));
+            if !superview.is_null() {
+                return; // already on screen
+            }
+            log!("Bringing the presenting OpenGL ES context's view to the front");
+            // -[SDL_uikitview setSDLWindow:] does nothing if the view already
+            // belongs to the window, so detach it first.
+            let set_window = sel_registerName(c"setSDLWindow:".as_ptr());
+            send1(view, set_window, std::ptr::null_mut());
+            send1(view, set_window, self.window.raw() as *mut c_void);
+        }
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    fn show_current_gl_context_view(&self) {}
 
     /// Consider the emulated device to be rotated to a particular orientation.
     ///
