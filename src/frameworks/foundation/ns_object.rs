@@ -160,7 +160,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 + (id)allocWithZone:(NSZonePtr)_zone {
     log_dbg!("[{:?} allocWithZone:]", this);
-    env.objc.alloc_object(this, Box::new(TrivialHostObject), &mut env.mem)
+    let new = env.objc.alloc_object(this, Box::new(TrivialHostObject), &mut env.mem);
+    crate::objc::call_cxx_constructors(env, new);
+    new
 }
 
 + (id)new {
@@ -225,6 +227,9 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 + (id)instanceMethodSignatureForSelector:(SEL)selector {
+    if let Some(&types) = env.objc.class_get_method_signature(this, selector) {
+        return msg_class![env; NSMethodSignature signatureWithObjCTypes:(types.cast_mut().cast::<std::ffi::c_void>())];
+    }
     let sig: id = msg_class![env; NSMethodSignature signatureWithObjCTypes:(MutVoidPtr::null())];
     let sel_str = selector.as_str(&env.mem);
     let explicit_args = sel_str.chars().filter(|&c| c == ':').count() as NSUInteger;
@@ -305,6 +310,7 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (())dealloc {
     log_dbg!("[{:?} dealloc]", this);
+    crate::objc::call_cxx_destructors(env, this);
 
     // Очищаем и высвобождаем динамические свойства KVC
     let mut to_release = Vec::new();
@@ -535,6 +541,10 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (id)methodSignatureForSelector:(SEL)selector {
+    let class = ObjC::read_isa(this, &env.mem);
+    if let Some(&types) = env.objc.class_get_method_signature(class, selector) {
+        return msg_class![env; NSMethodSignature signatureWithObjCTypes:(types.cast_mut().cast::<std::ffi::c_void>())];
+    }
     let sig: id = msg_class![env; NSMethodSignature signatureWithObjCTypes:(MutVoidPtr::null())];
     let sel_str = selector.as_str(&env.mem);
     let explicit_args = sel_str.chars().filter(|&c| c == ':').count() as NSUInteger;
@@ -770,12 +780,21 @@ pub const CLASSES: ClassExports = objc_classes! {
 - (())awakeFromNib {
 }
 
-- (())performSelector:(SEL)sel onThread:(id)_thread withObject:(id)arg waitUntilDone:(bool)_wait {
+- (())performSelector:(SEL)sel onThread:(id)_thread withObject:(id)arg waitUntilDone:(bool)wait {
+    if wait {
+        // The caller expects the work to be done when this returns, so do it
+        // right away (on the current thread).
+        let _: id = msg_send_no_type_checking(env, (this, sel, arg));
+        return;
+    }
     log_dbg!("performSelector:{} onThread:withObject:waitUntilDone: — scheduling on main thread instead", sel.as_str(&env.mem));
     msg![env; this performSelector:sel withObject:arg afterDelay:0.0]
 }
 
-- (())performSelector:(SEL)sel onThread:(id)_thread withObject:(id)arg waitUntilDone:(bool)_wait modes:(id)_modes {
+- (())performSelector:(SEL)sel onThread:(id)thread withObject:(id)arg waitUntilDone:(bool)wait modes:(id)_modes {
+    if wait {
+        return msg![env; this performSelector:sel onThread:thread withObject:arg waitUntilDone:wait];
+    }
     log_dbg!("performSelector:{} onThread:withObject:waitUntilDone:modes: — scheduling on main thread instead", sel.as_str(&env.mem));
     msg![env; this performSelector:sel withObject:arg afterDelay:0.0]
 }

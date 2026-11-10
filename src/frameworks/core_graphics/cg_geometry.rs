@@ -18,8 +18,22 @@ use crate::objc::{id, msg, msg_class, nil};
 use crate::Environment;
 
 fn parse_tuple(s: &str) -> Result<(f32, f32), ()> {
-    let (a, b) = s.split_once(", ").ok_or(())?;
-    Ok((a.parse().map_err(|_| ())?, b.parse().map_err(|_| ())?))
+    let n = parse_numbers(s);
+    Ok((n[0], n[1]))
+}
+
+/// Get the numbers out of a string like `{{1, 2}, {3, 4}}`, the way
+/// `CGRectFromString` and friends do: braces, commas and whitespace are
+/// separators (so `{ 1.5,2 }` works too), and missing numbers are 0.
+fn parse_numbers(s: &str) -> [f32; 4] {
+    let mut res = [0.0; 4];
+    let tokens = s
+        .split(|c: char| c == '{' || c == '}' || c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty());
+    for (i, token) in tokens.take(4).enumerate() {
+        res[i] = token.parse().unwrap_or(0.0);
+    }
+    res
 }
 
 // =========================================================================
@@ -50,7 +64,6 @@ impl GuestArg for CGPoint {
 impl std::str::FromStr for CGPoint {
     type Err = ();
     fn from_str(s: &str) -> Result<CGPoint, ()> {
-        let s = s.strip_prefix('{').ok_or(())?.strip_suffix('}').ok_or(())?;
         let (x, y) = parse_tuple(s)?;
         Ok(CGPoint { x, y })
     }
@@ -127,7 +140,6 @@ impl GuestArg for CGSize {
 impl std::str::FromStr for CGSize {
     type Err = ();
     fn from_str(s: &str) -> Result<CGSize, ()> {
-        let s = s.strip_prefix('{').ok_or(())?.strip_suffix('}').ok_or(())?;
         let (w, h) = parse_tuple(s)?;
         Ok(CGSize {
             width: w,
@@ -210,14 +222,7 @@ impl GuestArg for CGRect {
 impl std::str::FromStr for CGRect {
     type Err = ();
     fn from_str(s: &str) -> Result<CGRect, ()> {
-        let s = s
-            .strip_prefix("{{")
-            .ok_or(())?
-            .strip_suffix("}}")
-            .ok_or(())?;
-        let (a, b) = s.split_once("}, {").ok_or(())?;
-        let (x, y) = parse_tuple(a)?;
-        let (width, height) = parse_tuple(b)?;
+        let [x, y, width, height] = parse_numbers(s);
         Ok(CGRect {
             origin: CGPoint { x, y },
             size: CGSize { width, height },

@@ -38,6 +38,7 @@ pub mod ns_date;
 pub mod ns_date_components;
 pub mod ns_date_formatter;
 pub mod ns_decimal_number;
+pub mod ns_block;
 pub mod ns_dictionary;
 pub mod ns_enumerator;
 pub mod ns_error;
@@ -58,6 +59,7 @@ pub mod ns_locale;
 pub mod ns_lock;
 pub mod ns_log;
 pub mod ns_metadata_query;
+pub mod ns_proxy;
 pub mod ns_notification;
 pub mod ns_notification_center;
 pub mod ns_null;
@@ -1536,11 +1538,13 @@ pub const DYLIB: crate::dyld::HostDylib = crate::dyld::HostDylib {
         ns_json_serialization::CLASSES,
         ns_input_stream::CLASSES,
         ns_invocation::CLASSES,
+        ns_block::CLASSES,
         ns_keyed_archiver::CLASSES,
         ns_keyed_unarchiver::CLASSES,
         ns_locale::CLASSES,
         ns_lock::CLASSES,
         ns_metadata_query::CLASSES,
+        ns_proxy::CLASSES,
         ns_notification::CLASSES,
         ns_notification_center::CLASSES,
         ns_null::CLASSES,
@@ -1657,6 +1661,26 @@ impl crate::abi::GuestArg for NSRange {
     }
 }
 
+/// `NSRange NSUnionRange(NSRange range1, NSRange range2)`
+fn NSUnionRange(_env: &mut Environment, a: NSRange, b: NSRange) -> NSRange {
+    let (a_loc, a_len, b_loc, b_len) = (a.location, a.length, b.location, b.length);
+    let start = a_loc.min(b_loc);
+    let end = (a_loc + a_len).max(b_loc + b_len);
+    NSRange { location: start, length: end - start }
+}
+
+/// `NSRange NSIntersectionRange(NSRange range1, NSRange range2)`
+fn NSIntersectionRange(_env: &mut Environment, a: NSRange, b: NSRange) -> NSRange {
+    let (a_loc, a_len, b_loc, b_len) = (a.location, a.length, b.location, b.length);
+    let start = a_loc.max(b_loc);
+    let end = (a_loc + a_len).min(b_loc + b_len);
+    if end <= start {
+        NSRange { location: 0, length: 0 }
+    } else {
+        NSRange { location: start, length: end - start }
+    }
+}
+
 fn NSStringFromRange(env: &mut Environment, range: NSRange) -> id {
     let loc = range.location;
 
@@ -1726,6 +1750,8 @@ fn hash_helper<T: std::hash::Hash>(hashable: &T) -> NSUInteger {
 
 const FUNCTIONS: FunctionExports = &[
     export_c_func!(NSStringFromRange(_)),
+    export_c_func!(NSUnionRange(_, _)),
+    export_c_func!(NSIntersectionRange(_, _)),
     export_c_func!(NSGetSizeAndAlignment(_, _, _)),
     export_c_func!(CFStringGetCharactersPtr(_)),
 ];

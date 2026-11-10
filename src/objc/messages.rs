@@ -101,6 +101,119 @@ fn ensure_class_initialized(env: &mut Environment, class_to_init: Class) {
     regs[0..4].copy_from_slice(&saved_r0_r3);
 }
 
+/// Objective-C message forwarding, for an object that doesn't respond to a
+/// selector: first `forwardingTargetForSelector:` (if implemented), then
+/// `methodSignatureForSelector:` + `forwardInvocation:` (if the class
+/// implements `forwardInvocation:`, e.g. `NSProxy` subclasses).
+///
+/// Must be called with the message's arguments still in place (r0-r3 and the
+/// stack). Returns `true` if the message was forwarded, in which case the
+/// return value is in r0/r1. Otherwise the registers are left unchanged.
+fn try_forward_message(env: &mut Environment, receiver: id, selector: SEL, class: Class) -> bool {
+    use crate::cpu::Cpu;
+    use crate::frameworks::foundation::ns_invocation::type_encoding_size;
+    use crate::frameworks::foundation::{NSInteger, NSUInteger};
+    use crate::mem::MutPtr;
+
+    let sel_name = selector.as_str(&env.mem);
+    if matches!(
+        sel_name,
+        "forwardingTargetForSelector:"
+            | "methodSignatureForSelector:"
+            | "forwardInvocation:"
+            | "dealloc"
+            | "release"
+            | "retain"
+            | "autorelease"
+            | "initialize"
+    ) {
+        return false;
+    }
+
+    let saved = {
+        let regs = env.cpu.regs();
+        [regs[0], regs[1], regs[2], regs[3]]
+    };
+    let sp = env.cpu.regs()[Cpu::SP];
+    let restore = |env: &mut Environment| env.cpu.regs_mut()[0..4].copy_from_slice(&saved);
+
+    // Fast forwarding.
+    if let Some(ftfs) = env.objc.lookup_selector("forwardingTargetForSelector:") {
+        if env.objc.class_has_method(class, ftfs) {
+            let target: id = msg_send_no_type_checking(env, (receiver, ftfs, selector));
+            restore(env);
+            if target != nil && target != receiver {
+                env.cpu.regs_mut()[0] = target.to_bits();
+                objc_msgSend_inner(env, target, selector, None, false, false);
+                return true;
+            }
+        }
+    }
+
+    // Normal forwarding.
+    let (Some(fwd_inv), Some(msfs)) = (
+        env.objc.lookup_selector("forwardInvocation:"),
+        env.objc.lookup_selector("methodSignatureForSelector:"),
+    ) else {
+        return false;
+    };
+    if !env.objc.class_has_method(class, fwd_inv) {
+        return false;
+    }
+    let sig: id = msg_send_no_type_checking(env, (receiver, msfs, selector));
+    if sig == nil {
+        restore(env);
+        return false;
+    }
+    log_dbg!("Forwarding {} to {:?}", selector.as_str(&env.mem), receiver);
+
+    let inv: id = msg_class![env; NSInvocation invocationWithMethodSignature:sig];
+    () = msg![env; inv setTarget:receiver];
+    () = msg![env; inv setSelector:selector];
+
+    // Collect the arguments as they were passed: words 0-3 in r0-r3, the
+    // rest on the stack.
+    let read_word = |env: &Environment, idx: usize| -> u32 {
+        if idx < 4 {
+            saved[idx]
+        } else {
+            let ptr: ConstPtr<u32> = ConstPtr::from_bits(sp + 4 * (idx as u32 - 4));
+            env.mem.read(ptr)
+        }
+    };
+    let num_args: NSUInteger = msg![env; sig numberOfArguments];
+    let mut word_idx = 2; // after self and _cmd
+    for i in 2..num_args {
+        let ty_ptr: ConstPtr<u8> = msg![env; sig getArgumentTypeAtIndex:i];
+        let size = if ty_ptr.is_null() {
+            4
+        } else {
+            type_encoding_size(env.mem.cstr_at_utf8(ty_ptr).unwrap_or("@")).max(1)
+        };
+        let words = size.div_ceil(4);
+        let buf: MutPtr<u32> = env.mem.alloc(words * 4).cast();
+        for w in 0..words {
+            let word = read_word(env, word_idx);
+            env.mem.write(buf + w, word);
+            word_idx += 1;
+        }
+        () = msg![env; inv setArgument:(buf.cast::<std::ffi::c_void>()) atIndex:(i as NSInteger)];
+        env.mem.free(buf.cast());
+    }
+
+    () = msg_send_no_type_checking(env, (receiver, fwd_inv, inv));
+
+    let out: MutPtr<u32> = env.mem.alloc(8).cast();
+    () = msg![env; inv _touchHLE_getReturnRegisters:out];
+    let r0 = env.mem.read(out);
+    let r1 = env.mem.read(out + 1);
+    env.mem.free(out.cast());
+    let regs = env.cpu.regs_mut();
+    regs[0] = r0;
+    regs[1] = r1;
+    true
+}
+
 /// The core implementation of `objc_msgSend`, the main function of Objective-C.
 ///
 /// Note that while only two parameters (usually receiver and selector) are
@@ -476,6 +589,13 @@ fn objc_msgSend_inner(
             };
 
             let missing_selector_name = selector.as_str(&env.mem).to_owned();
+
+            if !is_metaclass
+                && super2.is_none()
+                && try_forward_message(env, receiver, selector, orig_class)
+            {
+                return;
+            }
 
             if try_cocos_missing_selector_compat(
                 env,

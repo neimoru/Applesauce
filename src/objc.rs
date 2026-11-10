@@ -57,7 +57,7 @@ pub use messages::{
     autorelease, msg, msg_class, msg_send, msg_send_no_initialize, msg_send_no_type_checking,
     msg_send_super2, msg_super, objc_super, release, retain,
 };
-pub use methods::{HostIMP, IMP};
+pub use methods::{call_cxx_constructors, call_cxx_destructors, HostIMP, IMP};
 pub use objects::{
     id, impl_HostObject_with_superclass, nil, AnyHostObject, HostObject, TrivialHostObject,
 };

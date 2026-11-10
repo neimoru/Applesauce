@@ -497,7 +497,7 @@ fn CGPathGetCurrentPoint(env: &mut Environment, path: CGPathRef) -> CGPoint {
     CGPoint { x: 0.0, y: 0.0 }
 }
 
-fn CGPathGetBoundingBox(env: &mut Environment, path: CGPathRef) -> CGRect {
+pub(crate) fn CGPathGetBoundingBox(env: &mut Environment, path: CGPathRef) -> CGRect {
     if path.is_null() {
         return CGRect {
             origin: CGPoint { x: 0.0, y: 0.0 },

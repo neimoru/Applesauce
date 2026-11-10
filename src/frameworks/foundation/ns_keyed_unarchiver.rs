@@ -685,14 +685,21 @@ fn keys_for_key(env: &mut Environment, unarchiver: id, key: &str) -> Vec<Uid> {
     let Some(objects) = host_obj.plist.get("$objects").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
-    let Some(current_key) = host_obj.current_key else {
-        return Vec::new();
+    // With no object being decoded, keys refer to the top level (`$top`),
+    // e.g. when an app calls `initWithCoder:` on the unarchiver directly.
+    let item = match host_obj.current_key {
+        Some(current_key) => {
+            let idx = current_key.get() as usize;
+            if idx >= objects.len() {
+                return Vec::new();
+            }
+            &objects[idx]
+        }
+        None => match host_obj.plist.get("$top") {
+            Some(top) => top,
+            None => return Vec::new(),
+        },
     };
-    let idx = current_key.get() as usize;
-    if idx >= objects.len() {
-        return Vec::new();
-    }
-    let item = &objects[idx];
     let Some(dict) = item.as_dictionary() else {
         return Vec::new();
     };

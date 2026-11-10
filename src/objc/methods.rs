@@ -362,3 +362,49 @@ impl ObjC {
         selector_strings
     }
 }
+
+/// Run the C++ constructors (`.cxx_construct`) of an object's instance
+/// variables, like the Objective-C runtime does when an object is allocated:
+/// from the root class down to the object's class. Classes with C++ ivars
+/// (e.g. Box2D objects embedded in an Objective-C++ object) need this.
+pub fn call_cxx_constructors(env: &mut Environment, object: super::id) {
+    call_cxx_structors(env, object, ".cxx_construct", /* root_first: */ true)
+}
+
+/// Run the C++ destructors (`.cxx_destruct`) of an object's instance
+/// variables, from the object's class up to the root class.
+pub fn call_cxx_destructors(env: &mut Environment, object: super::id) {
+    call_cxx_structors(env, object, ".cxx_destruct", /* root_first: */ false)
+}
+
+fn call_cxx_structors(env: &mut Environment, object: super::id, sel_name: &str, root_first: bool) {
+    use crate::abi::CallFromHost;
+    if object == super::nil {
+        return;
+    }
+    // Most apps have no C++ ivars at all, so this check is cheap.
+    let Some(sel) = env.objc.lookup_selector(sel_name) else {
+        return;
+    };
+    let mut imps = Vec::new();
+    let mut class = ObjC::read_isa(object, &env.mem);
+    while class != super::nil {
+        let Some(host_object) = env
+            .objc
+            .get_host_object(class)
+            .and_then(|h| h.as_any().downcast_ref::<ClassHostObject>())
+        else {
+            break;
+        };
+        if let Some(IMP::Guest(imp)) = host_object.methods.get(&sel) {
+            imps.push(*imp);
+        }
+        class = host_object.superclass;
+    }
+    if root_first {
+        imps.reverse();
+    }
+    for imp in imps {
+        let _: super::id = imp.call_from_host(env, (object, sel));
+    }
+}

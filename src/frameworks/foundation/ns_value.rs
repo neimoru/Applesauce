@@ -47,6 +47,8 @@ pub(super) enum NSValueHostObject {
     CGRect(CGRect),
     NSRange(NSRange),
     CATransform3D(CATransform3D),
+    /// Any other type: the raw bytes and the type encoding.
+    Bytes(Vec<u8>, String),
 }
 impl Default for NSValueHostObject {
     // Phantom-fallback value; an empty `NSRange` is the closest "no info"
@@ -137,6 +139,59 @@ impl NSNumberHostObject {
     impl_AsValue!(as_i128, i128);
 }
 
+impl NSValueHostObject {
+    /// Build a value from raw bytes and a type encoding.
+    fn from_bytes(bytes: Vec<u8>, ty: String) -> Self {
+        use crate::mem::SafeRead;
+        fn read<T: SafeRead>(bytes: &[u8]) -> T {
+            assert!(bytes.len() >= std::mem::size_of::<T>());
+            // SAFETY: SafeRead types are plain old data.
+            unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
+        }
+        let name = ty.trim_start_matches('{').split('=').next().unwrap_or("");
+        match name {
+            "CGPoint" if bytes.len() >= 8 => NSValueHostObject::CGPoint(read(&bytes)),
+            "CGSize" if bytes.len() >= 8 => NSValueHostObject::CGSize(read(&bytes)),
+            "CGRect" if bytes.len() >= 16 => NSValueHostObject::CGRect(read(&bytes)),
+            "_NSRange" if bytes.len() >= 8 => NSValueHostObject::NSRange(read(&bytes)),
+            "CATransform3D" if bytes.len() >= 64 => NSValueHostObject::CATransform3D(read(&bytes)),
+            _ => NSValueHostObject::Bytes(bytes, ty),
+        }
+    }
+
+    /// The raw bytes of the value.
+    fn to_bytes(&self) -> Vec<u8> {
+        fn raw<T>(v: &T) -> Vec<u8> {
+            // SAFETY: plain old data being viewed as bytes.
+            unsafe {
+                std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>())
+            }
+            .to_vec()
+        }
+        match self {
+            NSValueHostObject::CGPoint(v) => raw(v),
+            NSValueHostObject::CGSize(v) => raw(v),
+            NSValueHostObject::CGRect(v) => raw(v),
+            NSValueHostObject::NSRange(v) => raw(v),
+            NSValueHostObject::CATransform3D(v) => raw(v),
+            NSValueHostObject::Bytes(b, _) => b.clone(),
+        }
+    }
+
+    fn type_encoding(&self) -> &str {
+        match self {
+            NSValueHostObject::CGPoint(_) => "{CGPoint=ff}",
+            NSValueHostObject::CGSize(_) => "{CGSize=ff}",
+            NSValueHostObject::CGRect(_) => "{CGRect={CGPoint=ff}{CGSize=ff}}",
+            NSValueHostObject::NSRange(_) => "{_NSRange=II}",
+            NSValueHostObject::CATransform3D(_) => {
+                "{CATransform3D=ffffffffffffffff}"
+            }
+            NSValueHostObject::Bytes(_, ty) => ty,
+        }
+    }
+}
+
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
@@ -192,10 +247,86 @@ pub const CLASSES: ClassExports = objc_classes! {
     msg_class![env; NSNumber numberWithUnsignedInt:(object.to_bits())]
 }
 
-+ (id)valueWithBytes:(ConstVoidPtr)value objCType:(ConstVoidPtr)_type {
-    // Store as a pointer/uint — we don't model arbitrary ObjC types.
-    let bits = value.to_bits();
-    msg_class![env; NSNumber numberWithUnsignedInt:bits]
++ (id)valueWithBytes:(ConstVoidPtr)value objCType:(ConstVoidPtr)type_ptr {
+    let new: id = msg![env; this alloc];
+    let new: id = msg![env; new initWithBytes:value objCType:type_ptr];
+    autorelease(env, new)
+}
+
++ (id)value:(ConstVoidPtr)value withObjCType:(ConstVoidPtr)type_ptr {
+    msg![env; this valueWithBytes:value objCType:type_ptr]
+}
+
+- (id)initWithBytes:(ConstVoidPtr)value objCType:(ConstVoidPtr)type_ptr {
+    let ty = env.mem.cstr_at_utf8(type_ptr.cast()).unwrap_or("").to_string();
+    let size = crate::frameworks::foundation::ns_invocation::type_encoding_size(&ty);
+    let bytes = env.mem.bytes_at(value.cast(), size).to_vec();
+    let host_object = Box::new(NSValueHostObject::from_bytes(bytes, ty));
+    // The receiver may not have an NSValue host object (it came from
+    // +[NSObject alloc]), so replace it with a new object.
+    let class: Class = msg![env; this class];
+    let new = env.objc.alloc_object(class, host_object, &mut env.mem);
+    env.objc.dealloc_object(this, &mut env.mem);
+    new
+}
+
+- (id)initWithCoder:(id)coder {
+    // Keyed archives store the common struct types as strings, selected by
+    // "NS.special": 1 = point, 2 = size, 3 = rect, 4 = range.
+    let special_key = from_rust_string(env, "NS.special".to_string());
+    let special: NSInteger = msg![env; coder decodeIntegerForKey:special_key];
+    release(env, special_key);
+    let string_for_key = |env: &mut Environment, key: &str| -> String {
+        let key = from_rust_string(env, key.to_string());
+        let value: id = msg![env; coder decodeObjectForKey:key];
+        release(env, key);
+        if value == nil {
+            String::new()
+        } else {
+            super::ns_string::to_rust_string(env, value).to_string()
+        }
+    };
+    let host_object = match special {
+        1 => NSValueHostObject::CGPoint(string_for_key(env, "NS.pointval").parse().unwrap_or_default()),
+        2 => NSValueHostObject::CGSize(string_for_key(env, "NS.sizeval").parse().unwrap_or_default()),
+        3 => NSValueHostObject::CGRect(string_for_key(env, "NS.rectval").parse().unwrap_or_default()),
+        4 => {
+            let loc_key = from_rust_string(env, "NS.rangeval.location".to_string());
+            let len_key = from_rust_string(env, "NS.rangeval.length".to_string());
+            let location: NSInteger = msg![env; coder decodeIntegerForKey:loc_key];
+            let length: NSInteger = msg![env; coder decodeIntegerForKey:len_key];
+            release(env, loc_key);
+            release(env, len_key);
+            NSValueHostObject::NSRange(NSRange { location: location as NSUInteger, length: length as NSUInteger })
+        }
+        _ => {
+            log!("Warning: -[NSValue initWithCoder:] unsupported NS.special {}", special);
+            NSValueHostObject::default()
+        }
+    };
+    let class: Class = msg![env; this class];
+    let new = env.objc.alloc_object(class, Box::new(host_object), &mut env.mem);
+    env.objc.dealloc_object(this, &mut env.mem);
+    new
+}
+
+- (())getValue:(MutVoidPtr)buffer {
+    let bytes = env.objc.borrow::<NSValueHostObject>(this).to_bytes();
+    env.mem.bytes_at_mut(buffer.cast(), bytes.len() as u32).copy_from_slice(&bytes);
+}
+
+- (())getValue:(MutVoidPtr)buffer size:(NSUInteger)size {
+    let bytes = env.objc.borrow::<NSValueHostObject>(this).to_bytes();
+    let n = bytes.len().min(size as usize);
+    env.mem.bytes_at_mut(buffer.cast(), n as u32).copy_from_slice(&bytes[..n]);
+}
+
+- (ConstVoidPtr)objCType {
+    let ty = env.objc.borrow::<NSValueHostObject>(this).type_encoding().to_string();
+    let s = from_rust_string(env, ty);
+    let s = autorelease(env, s);
+    let c: ConstPtr<u8> = msg![env; s UTF8String];
+    c.cast()
 }
 
 // MARK: - Additional NSValue accessors
@@ -238,6 +369,9 @@ pub const CLASSES: ClassExports = objc_classes! {
         (NSValueHostObject::CATransform3D(a), NSValueHostObject::CATransform3D(b)) => {
             a.equal_to(*b)
         }
+        (NSValueHostObject::Bytes(a, ta), NSValueHostObject::Bytes(b, tb)) => {
+            a == b && ta == tb
+        }
         _ => false,
     }
 }
@@ -279,6 +413,10 @@ pub const CLASSES: ClassExports = objc_classes! {
                 m31, m32, m33, m34,
                 m41, m42, m43, m44,
             )
+        }
+        NSValueHostObject::Bytes(b, _) => {
+            let hex: Vec<String> = b.iter().map(|x| format!("{:02x}", x)).collect();
+            format!("<{}>", hex.join(""))
         }
     };
     let ns = from_rust_string(env, s);
@@ -372,8 +510,13 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 
 - (MutVoidPtr)pointerValue {
-    let class: Class = msg![env; this class];
-    assert!(class == env.objc.get_known_class("NSNumber", &mut env.mem));
+    if let Some(NSValueHostObject::Bytes(b, _)) =
+        env.objc.get_host_object(this).and_then(|h| h.as_any().downcast_ref::<NSValueHostObject>())
+    {
+        if b.len() >= 4 {
+            return MutVoidPtr::from_bits(u32::from_le_bytes(b[..4].try_into().unwrap()));
+        }
+    }
     // According to the docs, `If the value object was not created to hold
     // a pointer-sized data item, the result is undefined.`
     let val = msg![env; this unsignedIntValue];

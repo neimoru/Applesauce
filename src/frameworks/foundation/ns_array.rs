@@ -501,6 +501,48 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.mem.free(stop_ptr.cast());
 }
 
+- (NSUInteger)indexOfObjectPassingTest:(MutVoidPtr)block {
+    let opts: NSUInteger = 0;
+    msg![env; this indexOfObjectWithOptions:opts passingTest:block]
+}
+
+- (NSUInteger)indexOfObjectWithOptions:(NSUInteger)opts passingTest:(MutVoidPtr)block {
+    const NS_ENUMERATION_REVERSE: NSUInteger = 1 << 1;
+    const NS_NOT_FOUND: NSUInteger = NSNotFound as NSUInteger;
+    if block.is_null() {
+        return NS_NOT_FOUND;
+    }
+    let invoke_ptr_addr: MutPtr<u32> = Ptr::from_bits(block.to_bits() + 12);
+    let invoke_addr: u32 = env.mem.read(invoke_ptr_addr);
+    if invoke_addr == 0 {
+        return NS_NOT_FOUND;
+    }
+    let invoke = GuestFunction::from_addr_with_thumb_bit(invoke_addr);
+    let block_arg: crate::mem::ConstVoidPtr = block.cast_const();
+    let stop_ptr: MutPtr<u8> = env.mem.alloc(4).cast();
+    env.mem.write(stop_ptr, 0u8);
+
+    let count: NSUInteger = msg![env; this count];
+    let reverse = (opts & NS_ENUMERATION_REVERSE) != 0;
+    let mut result = NS_NOT_FOUND;
+    for i in 0..count {
+        let idx: NSUInteger = if reverse { count - 1 - i } else { i };
+        let obj: id = msg![env; this objectAtIndex:idx];
+        let passed: u8 = <GuestFunction as CallFromHost<u8, (crate::mem::ConstVoidPtr, id, NSUInteger, MutPtr<u8>)>>::call_from_host(
+            &invoke, env, (block_arg, obj, idx, stop_ptr),
+        );
+        if passed != 0 {
+            result = idx;
+            break;
+        }
+        if env.mem.read(stop_ptr) != 0 {
+            break;
+        }
+    }
+    env.mem.free(stop_ptr.cast());
+    result
+}
+
 - (id)valueForKey:(id)key { // NSString*
     let count: NSUInteger = msg![env; this count];
     let mut result = Vec::with_capacity(count as usize);

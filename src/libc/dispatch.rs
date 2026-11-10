@@ -318,33 +318,8 @@ fn dispatch_async(env: &mut Environment, queue: dispatch_queue_t, block: dispatc
 /// Copy a block literal to the heap (like `_Block_copy`), so it stays valid
 /// after the function that created it on the stack has returned. Global
 /// blocks are returned as-is.
-fn copy_block_to_heap(env: &mut Environment, block: dispatch_block_t) -> MutVoidPtr {
-    const BLOCK_HAS_COPY_DISPOSE: u32 = 1 << 25;
-    const BLOCK_IS_GLOBAL: u32 = 1 << 28;
-    let words = block.cast::<u32>();
-    let flags: u32 = env.mem.read(words + 1u32);
-    if flags & BLOCK_IS_GLOBAL != 0 {
-        return block;
-    }
-    let descriptor: u32 = env.mem.read(words + 4u32);
-    if descriptor == 0 {
-        return block;
-    }
-    let descriptor = MutPtr::<u32>::from_bits(descriptor);
-    let size: u32 = env.mem.read(descriptor + 1u32);
-    if size < 20 {
-        return block;
-    }
-    let copy = env.mem.alloc(size);
-    env.mem.memmove(copy, block.cast_const(), size);
-    if flags & BLOCK_HAS_COPY_DISPOSE != 0 {
-        let copy_helper: u32 = env.mem.read(descriptor + 2u32);
-        if copy_helper != 0 {
-            let copy_helper = GuestFunction::from_addr_with_thumb_bit(copy_helper);
-            let _: () = copy_helper.call_from_host(env, (copy, block.cast_const()));
-        }
-    }
-    copy
+pub(crate) fn copy_block_to_heap(env: &mut Environment, block: dispatch_block_t) -> MutVoidPtr {
+    crate::libc::blocks::block_copy(env, block.cast_const()).cast_mut()
 }
 
 fn dispatch_sync(env: &mut Environment, queue: dispatch_queue_t, block: dispatch_block_t) {

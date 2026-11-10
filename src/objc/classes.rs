@@ -732,8 +732,8 @@ impl ObjC {
         };
 
         let class = self.alloc_static_object(metaclass, class_host_object, mem);
-        if name == "NSObject" {
-            // NSObject's metaclass has its class as the superclass.
+        if name == "NSObject" || name == "NSProxy" {
+            // A root class's metaclass has its class as the superclass.
             self.borrow_mut::<ClassHostObject>(metaclass).superclass = class;
         }
 
@@ -863,7 +863,7 @@ impl ObjC {
                     name, superclass, ..
                 } = self.borrow(next);
                 log_dbg!(
-                    "Class {} need ivar reconciliation with superclass {}!",
+                    "Class {} needs its ivars moved to fit superclass {}",
                     name,
                     &self.borrow::<ClassHostObject>(*superclass).name
                 );
@@ -885,9 +885,12 @@ impl ObjC {
                     let align_mask = max_alignment - 1;
                     diff = (diff + align_mask) & !align_mask;
 
-                    for (offset, _) in ivars.values_mut() {
+                    // Slide the ivars: the guest code reads each ivar's
+                    // offset from its offset variable, so update those.
+                    for (offset, _) in ivars.values() {
                         if !offset.is_null() {
-                            *offset = Ptr::from_bits((*offset).to_bits() + diff);
+                            let value: GuestUSize = mem.read(*offset);
+                            mem.write(offset.cast_mut(), value + diff);
                         }
                     }
                 }
@@ -2094,15 +2097,10 @@ pub fn objc_autorelease(env: &mut crate::Environment, obj: id) -> id {
 /// id objc_retainBlock(id x) { return (id)_Block_copy(x); }
 /// ```
 ///
-/// touchHLE's `_Block_copy` (see `src/libc/blocks.rs`) does not physically
-/// duplicate the block — global blocks (the common case for static literal
-/// blocks) are not reference-counted, and stack-block promotion needs deeper
-/// Block ABI work — so it returns the same pointer. Mirroring that here keeps
-/// `objc_retainBlock` consistent with the rest of the Block runtime, while
-/// still providing the correct return value the ARC-generated code expects.
+/// touchHLE's `_Block_copy` (see `src/libc/blocks.rs`) copies stack blocks
+/// to the heap and reference counts heap blocks, like Apple's.
 pub fn objc_retainBlock(env: &mut crate::Environment, block: id) -> id {
-    let _ = env;
-    block
+    crate::libc::blocks::block_copy(env, block.cast_const().cast()).cast_mut().cast()
 }
 
 /// `id objc_unsafeClaimAutoreleasedReturnValue(id obj)` — ARC runtime

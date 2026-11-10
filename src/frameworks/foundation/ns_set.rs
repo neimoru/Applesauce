@@ -113,6 +113,88 @@ pub const CLASSES: ClassExports = objc_classes! {
     retain(env, this)
 }
 
+- (id)initWithCoder:(id)coder {
+    let class: crate::objc::Class = msg![env; coder class];
+    let keyed_unarch_class: crate::objc::Class = msg_class![env; NSKeyedUnarchiver class];
+    let objects = if env.objc.class_is_subclass_of(class, keyed_unarch_class) {
+        super::ns_keyed_unarchiver::decode_current_array(env, coder)
+    } else {
+        log!("Warning: -[NSSet initWithCoder:] unsupported coder class {:?}; returning empty set.", class);
+        Vec::new()
+    };
+    let array = ns_array::from_vec(env, objects);
+    let res: id = msg![env; this initWithArray:array];
+    release(env, array);
+    res
+}
+
+- (())enumerateObjectsUsingBlock:(crate::mem::MutVoidPtr)block {
+    use crate::abi::{CallFromHost, GuestFunction};
+    if block.is_null() {
+        return;
+    }
+    let invoke: u32 = env.mem.read(block.cast::<u32>() + 3);
+    if invoke == 0 {
+        return;
+    }
+    let invoke = GuestFunction::from_addr_with_thumb_bit(invoke);
+    let objects: id = msg![env; this allObjects];
+    let count: NSUInteger = msg![env; objects count];
+    let stop_ptr: MutPtr<u8> = env.mem.alloc(4).cast();
+    env.mem.write(stop_ptr, 0u8);
+    for i in 0..count {
+        let obj: id = msg![env; objects objectAtIndex:i];
+        <GuestFunction as CallFromHost<(), (crate::mem::ConstVoidPtr, id, MutPtr<u8>)>>::call_from_host(
+            &invoke, env, (block.cast_const(), obj, stop_ptr),
+        );
+        if env.mem.read(stop_ptr) != 0 {
+            break;
+        }
+    }
+    env.mem.free(stop_ptr.cast());
+}
+
+- (bool)isEqualToSet:(id)other {
+    if this == other {
+        return true;
+    }
+    if other == nil {
+        return false;
+    }
+    let count_a: NSUInteger = msg![env; this count];
+    let count_b: NSUInteger = msg![env; other count];
+    if count_a != count_b {
+        return false;
+    }
+    msg![env; this isSubsetOfSet:other]
+}
+
+- (bool)isSubsetOfSet:(id)other {
+    let objects: id = msg![env; this allObjects];
+    let count: NSUInteger = msg![env; objects count];
+    for i in 0..count {
+        let obj: id = msg![env; objects objectAtIndex:i];
+        let contained: bool = msg![env; other containsObject:obj];
+        if !contained {
+            return false;
+        }
+    }
+    true
+}
+
+- (bool)intersectsSet:(id)other {
+    let objects: id = msg![env; this allObjects];
+    let count: NSUInteger = msg![env; objects count];
+    for i in 0..count {
+        let obj: id = msg![env; objects objectAtIndex:i];
+        let contained: bool = msg![env; other containsObject:obj];
+        if contained {
+            return true;
+        }
+    }
+    false
+}
+
 - (bool)containsObject:(id)object {
     let enumerator: id = msg![env; this objectEnumerator];
     loop {

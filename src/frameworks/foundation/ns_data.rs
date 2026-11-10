@@ -156,6 +156,47 @@ pub const CLASSES: ClassExports = objc_classes! {
     this
 }
 
+- (id)initWithBase64Encoding:(id)string {
+    if string == nil {
+        return nil;
+    }
+    let text = to_rust_string(env, string).to_string();
+    let Some(decoded) = base64_decode(&text) else {
+        log!("Warning: -[NSData initWithBase64Encoding:] got invalid base64");
+        release(env, this);
+        return nil;
+    };
+    set_bytes(env, this, &decoded);
+    this
+}
+
+- (id)initWithBase64EncodedString:(id)string options:(NSUInteger)_options {
+    msg![env; this initWithBase64Encoding:string]
+}
+
+- (id)initWithBase64EncodedData:(id)data options:(NSUInteger)_options {
+    if data == nil {
+        return nil;
+    }
+    let text = String::from_utf8_lossy(to_rust_slice(env, data)).into_owned();
+    let Some(decoded) = base64_decode(&text) else {
+        release(env, this);
+        return nil;
+    };
+    set_bytes(env, this, &decoded);
+    this
+}
+
+- (id)base64Encoding {
+    let encoded = base64_encode(to_rust_slice(env, this));
+    let s = super::ns_string::from_rust_string(env, encoded);
+    autorelease(env, s)
+}
+
+- (id)base64EncodedStringWithOptions:(NSUInteger)_options {
+    msg![env; this base64Encoding]
+}
+
 - (id)initWithData:(id)data {
     let bytes: ConstVoidPtr = msg![env; data bytes];
     let length: NSUInteger = msg![env; data length];
@@ -671,4 +712,66 @@ pub fn to_rust_slice(env: &mut Environment, data: id) -> &[u8] {
     }
     let casted_ptr: ConstPtr<u8> = borrowed_data.bytes.cast_const().cast();
     env.mem.bytes_at(casted_ptr, borrowed_data.length)
+}
+
+fn set_bytes(env: &mut Environment, data: id, bytes: &[u8]) {
+    let length = bytes.len() as NSUInteger;
+    if length == 0 {
+        return;
+    }
+    let alloc = env.mem.alloc(length);
+    env.mem.bytes_at_mut(alloc.cast(), length).copy_from_slice(bytes);
+    let host_object = env.objc.borrow_mut::<NSDataHostObject>(data);
+    host_object.bytes = alloc;
+    host_object.length = length;
+}
+
+/// Decode base64 (standard alphabet), ignoring whitespace and other unknown
+/// characters as Apple does with `NSDataBase64DecodingIgnoreUnknownCharacters`.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        } as u32)
+    }
+    let mut out = Vec::new();
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for &c in text.as_bytes() {
+        if c == b'=' {
+            break;
+        }
+        let Some(v) = val(c) else { continue };
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }

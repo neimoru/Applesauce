@@ -187,6 +187,20 @@ where
 }
 
 /// Helper for working with [ClassExports]/[ConstantExports]/[FunctionExports].
+/// The class (see ns_block.rs) for a Blocks runtime `_NSConcrete*Block`
+/// symbol, if `symbol` is one.
+fn block_class_name(symbol: &str) -> Option<&'static str> {
+    match symbol {
+        "__NSConcreteStackBlock" => Some("__NSStackBlock__"),
+        "__NSConcreteGlobalBlock" => Some("__NSGlobalBlock__"),
+        "__NSConcreteMallocBlock" => Some("__NSMallocBlock__"),
+        "__NSConcreteAutoBlock" | "__NSConcreteFinalizingBlock" | "__NSConcreteWeakBlockVariable" => {
+            Some("__NSMallocBlock__")
+        }
+        _ => None,
+    }
+}
+
 fn search_lists<T>(
     lists: &'static [&'static [(&'static str, T)]],
     symbol: &str,
@@ -786,16 +800,6 @@ impl Dyld {
     /// binaries symbols may be looked up in.
     fn do_non_lazy_linking(&mut self, bin: &MachO, bins: &[MachO], mem: &mut Mem, objc: &mut ObjC) {
         let mut unhandled_relocations: HashMap<&str, Vec<u32>> = HashMap::new();
-        // Cache for Objective-C blocks runtime class descriptors.
-        // All relocation sites for the same name must resolve to the same
-        // non-null guest address so that `block->isa ==
-        // &_NSConcreteGlobalBlock`
-        // identity checks in the blocks runtime work correctly.
-        // Without this, the isa field of every global/stack block is NULL
-        // (0x0),
-        // causing a NULL-page read the first time the ObjC runtime tries to
-        // retain or release a block object.
-        let mut block_class_addrs: HashMap<String, u32> = HashMap::new();
         // Cache for C++ Itanium ABI type_info vtables. All references to the
         // same vtable symbol must resolve to the same address so that vtable
         // identity checks in dynamic_cast work correctly.
@@ -840,15 +844,12 @@ impl Dyld {
                 mem.write(fn_ptr + 1, encode_a32_trap());
                 log_dbg!("Stubbed dyld_stub_binder at {:?}", fn_ptr);
                 fn_ptr.cast().cast_const()
-            } else if name == "__NSConcreteGlobalBlock" || name == "__NSConcreteStackBlock" {
-                // Blocks runtime class descriptor. Allocate a small dummy
-                // object in guest memory so isa != NULL. All sites for the
-                // same symbol share one address (cached above).
-                let addr = *block_class_addrs
-                    .entry(name.clone())
-                    .or_insert_with(|| mem.alloc(16).to_bits());
-                log_dbg!("Patched block class descriptor {} -> {:#x}", name, addr);
-                Ptr::from_bits(addr)
+            } else if let Some(class_name) = block_class_name(name) {
+                // Blocks runtime class: the isa of block literals, which is
+                // the class object (see ns_block.rs).
+                objc.link_class(class_name, /* is_metaclass: */ false, mem)
+                    .cast()
+                    .cast_const()
             } else if (name == "__ZTVN10__cxxabiv117__class_type_infoE"
                 || name == "__ZTVN10__cxxabiv120__si_class_type_infoE"
                 || name == "__ZTVN10__cxxabiv121__vmi_class_type_infoE"
@@ -1198,14 +1199,9 @@ impl Dyld {
             // Must be non-null so block->isa != NULL; otherwise the
             // first retain/release of any stack block causes a
             // NULL-page read at 0x0.
-            if symbol == "__NSConcreteStackBlock" || symbol == "__NSConcreteGlobalBlock" {
-                let dummy = mem.alloc(16);
-                mem.write(ptr_ptr, dummy.cast().cast_const());
-                log_dbg!(
-                    "Patched non-lazy block class {} -> {:#x}",
-                    symbol,
-                    dummy.to_bits()
-                );
+            if let Some(class_name) = block_class_name(symbol) {
+                let class = objc.link_class(class_name, /* is_metaclass: */ false, mem);
+                mem.write(ptr_ptr, class.cast().cast_const());
                 continue;
             }
 

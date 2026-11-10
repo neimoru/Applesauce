@@ -144,6 +144,13 @@ fn CGBitmapContextGetBytesPerRow(env: &mut Environment, context: CGContextRef) -
     bitmap_data.bytes_per_row
 }
 
+fn CGBitmapContextGetBitmapInfo(env: &mut Environment, context: CGContextRef) -> u32 {
+    let host_obj = env.objc.borrow::<CGContextHostObject>(context);
+    let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;
+    // Only the alpha info is kept.
+    bitmap_data.alpha_info
+}
+
 pub fn CGBitmapContextCreateImage(env: &mut Environment, context: CGContextRef) -> CGImageRef {
     let host_obj = env.objc.borrow::<CGContextHostObject>(context);
     let CGContextSubclass::CGBitmapContext(bitmap_data) = host_obj.subclass;
@@ -536,4 +543,5 @@ pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CGBitmapContextGetWidth(_)),
     export_c_func!(CGBitmapContextGetHeight(_)),
     export_c_func!(CGBitmapContextGetBytesPerRow(_)),
+    export_c_func!(CGBitmapContextGetBitmapInfo(_)),
 ];

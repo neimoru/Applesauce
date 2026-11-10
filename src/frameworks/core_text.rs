@@ -44,7 +44,8 @@ use crate::frameworks::uikit::ui_font::{font_from_uifont, is_uifont, draw_font_g
 use crate::font::{Font, TextAlignment, WrapMode};
 use crate::mem::{ConstPtr, ConstVoidPtr, MutPtr, Ptr};
 use crate::objc::{
-    autorelease, id, msg, msg_class, nil, objc_classes, retain, ClassExports, HostObject,
+    autorelease, id, msg, msg_class, nil, objc_classes, release, retain, ClassExports,
+    HostObject, NSZonePtr,
 };
 use crate::Environment;
 
@@ -117,8 +118,19 @@ struct CTFrameHostObject {
     /// The string range covered by the frame, mirrored back from the
     /// attributed string for `CTFrameGetStringRange`/`GetVisibleStringRange`.
     range: CFRange,
+    /// Bounding box of the frame's path.
+    rect: CGRect,
+    /// Text colour from the attributes, if any.
+    color: Option<(f32, f32, f32, f32)>,
+    alignment: TextAlignment,
 }
 impl HostObject for CTFrameHostObject {}
+
+struct CTParagraphStyleHostObject {
+    /// `CTTextAlignment`
+    alignment: u8,
+}
+impl HostObject for CTParagraphStyleHostObject {}
 
 pub const CLASSES: ClassExports = objc_classes! {
 
@@ -166,6 +178,226 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 @end
 
+@implementation _touchHLE_CTParagraphStyle: NSObject
+- (())dealloc {
+    env.objc.dealloc_object(this, &mut env.mem)
+}
+@end
+
+// NSAttributedString shares its representation with CFAttributedString, so
+// the two are interchangeable (toll-free bridged). Attributes are only
+// tracked for the string as a whole: per-range attributes are merged.
+@implementation NSAttributedString: NSObject
+
++ (id)allocWithZone:(NSZonePtr)_zone {
+    let host_object = Box::new(CTAttributedStringHostObject { string: nil, attrs: nil });
+    env.objc.alloc_object(this, host_object, &mut env.mem)
+}
+
+- (id)init {
+    let string: id = msg_class![env; NSString string];
+    msg![env; this initWithString:string attributes:nil]
+}
+
+- (id)initWithString:(id)string {
+    msg![env; this initWithString:string attributes:nil]
+}
+
+- (id)initWithString:(id)string attributes:(id)attrs {
+    let string: id = if string == nil { msg_class![env; NSString string] } else { string };
+    let string: id = msg![env; string copy];
+    let attrs: id = if attrs == nil {
+        msg_class![env; NSMutableDictionary new]
+    } else {
+        msg![env; attrs mutableCopy]
+    };
+    let host = env.objc.borrow_mut::<CTAttributedStringHostObject>(this);
+    let (old_string, old_attrs) = (host.string, host.attrs);
+    host.string = string;
+    host.attrs = attrs;
+    release(env, old_string);
+    release(env, old_attrs);
+    this
+}
+
+- (id)initWithAttributedString:(id)other {
+    let string: id = msg![env; other string];
+    let len: NSUInteger = msg![env; string length];
+    let attrs: id = if len > 0 {
+        msg![env; other attributesAtIndex:0u32 effectiveRange:(MutPtr::<NSRange>::null())]
+    } else {
+        nil
+    };
+    msg![env; this initWithString:string attributes:attrs]
+}
+
+- (id)string {
+    env.objc.borrow::<CTAttributedStringHostObject>(this).string
+}
+
+- (NSUInteger)length {
+    let string = env.objc.borrow::<CTAttributedStringHostObject>(this).string;
+    msg![env; string length]
+}
+
+- (id)attributesAtIndex:(NSUInteger)_index effectiveRange:(MutPtr<NSRange>)range {
+    if !range.is_null() {
+        let length: NSUInteger = msg![env; this length];
+        env.mem.write(range, NSRange { location: 0, length });
+    }
+    env.objc.borrow::<CTAttributedStringHostObject>(this).attrs
+}
+
+- (id)attribute:(id)name atIndex:(NSUInteger)index effectiveRange:(MutPtr<NSRange>)range {
+    let attrs: id = msg![env; this attributesAtIndex:index effectiveRange:range];
+    if attrs == nil {
+        return nil;
+    }
+    msg![env; attrs objectForKey:name]
+}
+
+- (bool)isEqualToAttributedString:(id)other {
+    if other == nil {
+        return false;
+    }
+    let (a, b): (id, id) = (msg![env; this string], msg![env; other string]);
+    msg![env; a isEqualToString:b]
+}
+
+- (id)description {
+    env.objc.borrow::<CTAttributedStringHostObject>(this).string
+}
+
+- (id)copyWithZone:(NSZonePtr)_zone {
+    let class = env.objc.get_known_class("NSAttributedString", &mut env.mem);
+    let new: id = msg![env; class alloc];
+    msg![env; new initWithAttributedString:this]
+}
+
+- (id)mutableCopyWithZone:(NSZonePtr)_zone {
+    let class = env.objc.get_known_class("NSMutableAttributedString", &mut env.mem);
+    let new: id = msg![env; class alloc];
+    msg![env; new initWithAttributedString:this]
+}
+
+- (())dealloc {
+    let host = env.objc.borrow::<CTAttributedStringHostObject>(this);
+    let (string, attrs) = (host.string, host.attrs);
+    release(env, string);
+    release(env, attrs);
+    env.objc.dealloc_object(this, &mut env.mem)
+}
+
+@end
+
+@implementation NSMutableAttributedString: NSAttributedString
+
+- (id)initWithString:(id)string attributes:(id)attrs {
+    let string: id = if string == nil { msg_class![env; NSString string] } else { string };
+    let string: id = msg![env; string mutableCopy];
+    let attrs: id = if attrs == nil {
+        msg_class![env; NSMutableDictionary new]
+    } else {
+        msg![env; attrs mutableCopy]
+    };
+    let host = env.objc.borrow_mut::<CTAttributedStringHostObject>(this);
+    let (old_string, old_attrs) = (host.string, host.attrs);
+    host.string = string;
+    host.attrs = attrs;
+    release(env, old_string);
+    release(env, old_attrs);
+    this
+}
+
+- (id)mutableString {
+    env.objc.borrow::<CTAttributedStringHostObject>(this).string
+}
+
+- (())addAttribute:(id)name value:(id)value range:(NSRange)_range {
+    let attrs = env.objc.borrow::<CTAttributedStringHostObject>(this).attrs;
+    if name != nil && value != nil {
+        () = msg![env; attrs setObject:value forKey:name];
+    }
+}
+
+- (())addAttributes:(id)new_attrs range:(NSRange)_range {
+    let attrs = env.objc.borrow::<CTAttributedStringHostObject>(this).attrs;
+    if new_attrs != nil {
+        () = msg![env; attrs addEntriesFromDictionary:new_attrs];
+    }
+}
+
+- (())setAttributes:(id)new_attrs range:(NSRange)range {
+    let length: NSUInteger = msg![env; this length];
+    let attrs = env.objc.borrow::<CTAttributedStringHostObject>(this).attrs;
+    // Only replace everything if the whole string is covered, otherwise
+    // merge (we can't represent per-range attributes).
+    let range_loc = range.location;
+    let range_len = range.length;
+    if range_loc == 0 && range_len >= length {
+        () = msg![env; attrs removeAllObjects];
+    }
+    if new_attrs != nil {
+        () = msg![env; attrs addEntriesFromDictionary:new_attrs];
+    }
+}
+
+- (())removeAttribute:(id)name range:(NSRange)_range {
+    let attrs = env.objc.borrow::<CTAttributedStringHostObject>(this).attrs;
+    () = msg![env; attrs removeObjectForKey:name];
+}
+
+- (())replaceCharactersInRange:(NSRange)range withString:(id)string {
+    let s = env.objc.borrow::<CTAttributedStringHostObject>(this).string;
+    () = msg![env; s replaceCharactersInRange:range withString:string];
+}
+
+- (())replaceCharactersInRange:(NSRange)range withAttributedString:(id)other {
+    let other_string: id = msg![env; other string];
+    let (loc, rlen) = (range.location, range.length);
+    () = msg![env; this replaceCharactersInRange:range withString:other_string];
+    let range = NSRange { location: loc, length: rlen };
+    let len: NSUInteger = msg![env; other length];
+    if len > 0 {
+        let other_attrs: id = msg![env; other attributesAtIndex:0u32 effectiveRange:(MutPtr::<NSRange>::null())];
+        () = msg![env; this addAttributes:other_attrs range:range];
+    }
+}
+
+- (())appendAttributedString:(id)other {
+    let length: NSUInteger = msg![env; this length];
+    let range = NSRange { location: length, length: 0 };
+    () = msg![env; this replaceCharactersInRange:range withAttributedString:other];
+}
+
+- (())insertAttributedString:(id)other atIndex:(NSUInteger)index {
+    let range = NSRange { location: index, length: 0 };
+    () = msg![env; this replaceCharactersInRange:range withAttributedString:other];
+}
+
+- (())deleteCharactersInRange:(NSRange)range {
+    let empty: id = msg_class![env; NSString string];
+    () = msg![env; this replaceCharactersInRange:range withString:empty];
+}
+
+- (())setAttributedString:(id)other {
+    let string: id = msg![env; other string];
+    let len: NSUInteger = msg![env; other length];
+    let attrs: id = if len > 0 {
+        msg![env; other attributesAtIndex:0u32 effectiveRange:(MutPtr::<NSRange>::null())]
+    } else {
+        nil
+    };
+    () = msg![env; this initWithString:string attributes:attrs];
+}
+
+- (())beginEditing {
+}
+- (())endEditing {
+}
+
+@end
+
 };
 
 fn alloc_descriptor(env: &mut Environment, attrs: id) -> CTFontDescriptorRef {
@@ -200,7 +432,17 @@ fn alloc_framesetter(env: &mut Environment, attr_string: id) -> CTFramesetterRef
 
 fn alloc_frame(env: &mut Environment, line: id, range: CFRange) -> CTFrameRef {
     let class = env.objc.get_known_class("_touchHLE_CTFrame", &mut env.mem);
-    env.objc.alloc_object(class, Box::new(CTFrameHostObject { line, range }), &mut env.mem)
+    let host_object = CTFrameHostObject {
+        line,
+        range,
+        rect: CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize { width: 0.0, height: 0.0 },
+        },
+        color: None,
+        alignment: TextAlignment::Left,
+    };
+    env.objc.alloc_object(class, Box::new(host_object), &mut env.mem)
 }
 
 fn descriptor_attrs(env: &mut Environment, descriptor: CTFontDescriptorRef) -> id {
@@ -267,6 +509,14 @@ fn string_and_font_from_attr_string(env: &mut Environment, attr_string: CFAttrib
         if maybe_font != nil {
             if is_uifont(env, maybe_font) {
                 maybe_font
+            } else if let Some(ct_font) = env
+                .objc
+                .get_host_object(maybe_font)
+                .and_then(|h| h.as_any().downcast_ref::<CTFontHostObject>())
+                .map(|h| h.font)
+                .filter(|&f| f != nil)
+            {
+                ct_font
             } else {
                 msg_class![env; UIFont systemFontOfSize:12.0]
             }
@@ -294,6 +544,25 @@ fn CTFontCreateWithFontDescriptor(
     _matrix: ConstVoidPtr,
 ) -> CTFontRef {
     let font = font_from_descriptor(env, descriptor, size);
+    retain(env, font);
+    alloc_font(env, font)
+}
+
+/// `CTFontRef CTFontCreateWithName(CFStringRef name, CGFloat size, const CGAffineTransform *matrix)`
+fn CTFontCreateWithName(
+    env: &mut Environment,
+    name: id,
+    size: CGFloat,
+    _matrix: ConstVoidPtr,
+) -> CTFontRef {
+    let size = if size > 0.0 { size } else { 12.0 };
+    let mut font: id = nil;
+    if name != nil {
+        font = msg_class![env; UIFont fontWithName:name size:size];
+    }
+    if font == nil {
+        font = msg_class![env; UIFont systemFontOfSize:size];
+    }
     retain(env, font);
     alloc_font(env, font)
 }
@@ -645,13 +914,15 @@ fn CTFramesetterCreateFrame(
     env: &mut Environment,
     framesetter: CTFramesetterRef,
     string_range: CFRange,
-    _path: id,
+    path: id,
     _frame_attributes: id,
 ) -> CTFrameRef {
     if framesetter.is_null() {
         return nil;
     }
+    let rect = crate::frameworks::core_graphics::cg_path::CGPathGetBoundingBox(env, path);
     let attr_string = env.objc.borrow::<CTFramesetterHostObject>(framesetter).attr_string;
+    let (color, alignment) = color_and_alignment_from_attr_string(env, attr_string);
     let (text, font) = string_and_font_from_attr_string(env, attr_string);
     retain(env, text);
     retain(env, font);
@@ -669,7 +940,55 @@ fn CTFramesetterCreateFrame(
             string_range.length
         },
     };
-    alloc_frame(env, line, range)
+    let frame = alloc_frame(env, line, range);
+    let host = env.objc.borrow_mut::<CTFrameHostObject>(frame);
+    host.rect = rect;
+    host.color = color;
+    host.alignment = alignment;
+    frame
+}
+
+/// Get the text colour and alignment from an attributed string's attributes.
+fn color_and_alignment_from_attr_string(
+    env: &mut Environment,
+    attr_string: CFAttributedStringRef,
+) -> (Option<(f32, f32, f32, f32)>, TextAlignment) {
+    let attrs = attributed_string_attrs(env, attr_string);
+    if attrs == nil {
+        return (None, TextAlignment::Left);
+    }
+    let mut color = None;
+    for key in ["CTForegroundColor", "NSColor"] {
+        let key_str = get_static_str(env, key);
+        let value: id = msg![env; attrs objectForKey:key_str];
+        if value == nil {
+            continue;
+        }
+        let ui_color_class = env.objc.get_known_class("UIColor", &mut env.mem);
+        let value_class: crate::objc::Class = msg![env; value class];
+        let cg_color: id = if env.objc.class_is_subclass_of(value_class, ui_color_class) {
+            msg![env; value CGColor]
+        } else {
+            value
+        };
+        color = Some(crate::frameworks::core_graphics::cg_color::to_rgba(&env.objc, cg_color));
+        break;
+    }
+    let mut alignment = TextAlignment::Left;
+    let style_key = get_static_str(env, "NSParagraphStyle");
+    let style: id = msg![env; attrs objectForKey:style_key];
+    if let Some(style) = env
+        .objc
+        .get_host_object(style)
+        .and_then(|h| h.as_any().downcast_ref::<CTParagraphStyleHostObject>())
+    {
+        alignment = match style.alignment {
+            1 => TextAlignment::Right,
+            2 => TextAlignment::Center,
+            _ => TextAlignment::Left,
+        };
+    }
+    (color, alignment)
 }
 
 /// `CFArrayRef CTFrameGetLines(CTFrameRef frame)`
@@ -751,10 +1070,61 @@ fn CTFrameDraw(env: &mut Environment, frame: CTFrameRef, context: id) {
     if frame.is_null() || context.is_null() {
         return;
     }
-    let line = env.objc.borrow::<CTFrameHostObject>(frame).line;
-    if line != nil {
-        CTLineDraw(env, line, context);
+    let host = env.objc.borrow::<CTFrameHostObject>(frame);
+    let (line, rect, color, alignment) = (host.line, host.rect, host.color, host.alignment);
+    if line == nil {
+        return;
     }
+    if rect.size.width <= 0.0 || rect.size.height <= 0.0 {
+        CTLineDraw(env, line, context);
+        return;
+    }
+    let text = line_text(env, line);
+    let font = line_font(env, line);
+    let size: CGFloat = msg![env; font pointSize];
+    let text_str = to_rust_string(env, text).into_owned();
+    let font_obj = font_from_uifont(env, font).unwrap_or_else(Font::sans_regular);
+    let mut drawer = CGBitmapContextDrawer::new(&env.objc, &mut env.mem, context);
+    let fill_color = color.unwrap_or_else(|| drawer.rgb_fill_color());
+    // CoreText lays text out from the top of the frame downwards, in the
+    // (unflipped, y-up) user space of the context. The font renderer works
+    // top-down, so flip each glyph into place.
+    let origin_x = match alignment {
+        TextAlignment::Left => 0.0,
+        TextAlignment::Center => rect.size.width / 2.0,
+        TextAlignment::Right => rect.size.width,
+    };
+    let top = rect.origin.y + rect.size.height;
+    font_obj.draw(
+        size,
+        &text_str,
+        (origin_x, 0.0),
+        Some((rect.size.width, WrapMode::Word)),
+        alignment,
+        |glyph| {
+            let (gx, gy) = glyph.origin();
+            let (gw, gh) = glyph.dimensions();
+            let (gw, gh) = (gw as f32, gh as f32);
+            if gy + gh > rect.size.height + 1.0 {
+                return; // past the bottom of the frame
+            }
+            let glyph_rect = CGRect {
+                origin: CGPoint {
+                    x: rect.origin.x + gx,
+                    y: top - gy - gh,
+                },
+                size: CGSize { width: gw, height: gh },
+            };
+            for ((x, y), (tex_x, tex_y)) in drawer.iter_transformed_pixels(glyph_rect) {
+                let coverage = glyph.pixel_at((
+                    (tex_x * gw - 0.5).round() as i32,
+                    ((1.0 - tex_y) * gh - 0.5).round() as i32,
+                ));
+                let (r, g, b, a) = fill_color;
+                drawer.put_pixel((x, y), (r * coverage, g * coverage, b * coverage, a * coverage), true);
+            }
+        },
+    );
 }
 
 /// `CTFontRef CTFontCreateWithGraphicsFont(CGFontRef graphicsFont,
@@ -810,10 +1180,23 @@ pub type CTParagraphStyleRef = crate::objc::id;
 /// Reference: <https://developer.apple.com/documentation/coretext/1524171-ctparagraphstylecreate>
 fn CTParagraphStyleCreate(
     env: &mut Environment,
-    _settings: ConstVoidPtr,
-    _setting_count: u32,
+    settings: ConstVoidPtr,
+    setting_count: u32,
 ) -> CTParagraphStyleRef {
-    msg_class![env; NSObject new]
+    // struct CTParagraphStyleSetting { spec: u32, value_size: u32, value: *const void }
+    let mut alignment = 4; // kCTNaturalTextAlignment
+    for i in 0..setting_count {
+        let entry: ConstPtr<u32> = settings.cast::<u32>() + i * 3;
+        let spec = env.mem.read(entry);
+        let value_size = env.mem.read(entry + 1);
+        let value: ConstPtr<u8> = Ptr::from_bits(env.mem.read(entry + 2));
+        // kCTParagraphStyleSpecifierAlignment
+        if spec == 0 && value_size >= 1 && !value.is_null() {
+            alignment = env.mem.read(value);
+        }
+    }
+    let class = env.objc.get_known_class("_touchHLE_CTParagraphStyle", &mut env.mem);
+    env.objc.alloc_object(class, Box::new(CTParagraphStyleHostObject { alignment }), &mut env.mem)
 }
 
 /// `CTParagraphStyleRef CTParagraphStyleCreateCopy(CTParagraphStyleRef)`
@@ -851,6 +1234,7 @@ fn CTParagraphStyleGetValueForSpecifier(
 pub const FUNCTIONS: FunctionExports = &[
     export_c_func!(CTFontCreateWithGraphicsFont(_, _, _, _)),
     export_c_func!(CTFontCreateWithFontDescriptor(_, _, _)),
+    export_c_func!(CTFontCreateWithName(_, _, _)),
     export_c_func!(CTFontDescriptorCreateWithAttributes(_)),
     export_c_func!(CTFontManagerRegisterGraphicsFont(_, _)),
     export_c_func!(CTFontGetAscent(_)),

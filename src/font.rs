@@ -55,7 +55,9 @@ impl Font {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum TextAlignment {
+    #[default]
     Left,
     Center,
     Right,
