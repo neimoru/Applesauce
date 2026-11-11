@@ -535,6 +535,24 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
             );
         }
 
+        {
+            // Diagnostics for apps that don't react to touches.
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static LOGGED: AtomicU32 = AtomicU32::new(0);
+            if LOGGED.fetch_add(1, Ordering::Relaxed) < 5 {
+                let view_class: crate::objc::Class = msg![env; view class];
+                let class_name = env.objc.get_class_name(view_class).to_owned();
+                let (lx, ly) = (location_in_window.x, location_in_window.y);
+                log!(
+                    "Touch down at ({}, {}) goes to {} {:?} [logged for the first 5 touches]",
+                    lx,
+                    ly,
+                    class_name,
+                    view
+                );
+            }
+        }
+
         let is_multi_touch_enabled: bool = msg![env; view isMultipleTouchEnabled];
         if !is_multi_touch_enabled && !touchhle_cocos_should_allow_multitouch(env, view)
             && (view_touches.contains_key(&view) || views_with_existing_touches.contains(&view))

@@ -1239,6 +1239,19 @@ impl Window {
                     ..
                 } => {
                     log_dbg!("Starting multi-touch for {:?}", event);
+                    {
+                        use std::sync::atomic::{AtomicU32, Ordering};
+                        static LOGGED: AtomicU32 = AtomicU32::new(0);
+                        if matches!(event, E::FingerDown { .. })
+                            && LOGGED.fetch_add(1, Ordering::Relaxed) < 5
+                        {
+                            log!(
+                                "Finger down from the OS at ({:.3}, {:.3}) [logged for the first 5 touches]",
+                                x,
+                                y
+                            );
+                        }
+                    }
                     // To implement multi-touch we accumulate here same touch
                     // events at the same timestamp. This is consistent with
                     // UIKit, but could be broken if events come out of order.
