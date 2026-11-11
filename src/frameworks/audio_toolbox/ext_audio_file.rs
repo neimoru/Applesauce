@@ -49,6 +49,95 @@ pub struct ExtAudioFileHostObject {
     /// When this ExtAudioFile was created by wrapping an existing AudioFileID
     /// we remember that ID so we don't double-free the underlying guest memory.
     pub wrapped_audio_file_id: Option<AudioFileID>,
+    /// The whole file decoded to 16-bit PCM, if it could be. With this, reads
+    /// are converted to the client format (sample format, channels, rate)
+    /// like the real ExtAudioFile does. Compressed files (e.g. AAC in CAF)
+    /// can only be read this way.
+    pub decoded: Option<DecodedPcm>,
+}
+
+pub struct DecodedPcm {
+    /// Interleaved samples.
+    pub samples: Vec<i16>,
+    pub sample_rate: f64,
+    pub channels: u32,
+}
+impl DecodedPcm {
+    fn frames(&self) -> u64 {
+        self.samples.len() as u64 / u64::from(self.channels.max(1))
+    }
+}
+
+/// Decode a whole audio file to 16-bit PCM.
+fn decode_audio_file(audio_file: &mut AudioFileHostObject) -> Option<DecodedPcm> {
+    let AudioFileHostObject::Real(af) = audio_file else {
+        return None;
+    };
+    let desc = af.audio_description();
+    if let Some(aac) = af.aac_packets() {
+        let cursor = std::io::Cursor::new(aac.packet_bytes.clone());
+        let decoded = audio::symphonia_formats::decode_symphonia_to_pcm(cursor).ok()?;
+        let samples = decoded
+            .bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        return Some(DecodedPcm {
+            samples,
+            sample_rate: f64::from(decoded.sample_rate),
+            channels: decoded.channels,
+        });
+    }
+    let audio::AudioFormat::LinearPcm {
+        is_float: false,
+        is_little_endian,
+    } = desc.format
+    else {
+        return None;
+    };
+    if desc.frames_per_packet != 1 || desc.channels_per_frame == 0 {
+        return None;
+    }
+    let byte_count = af.byte_count();
+    let mut bytes = vec![0u8; byte_count as usize];
+    let read = af.read_bytes(0, &mut bytes).ok()?;
+    bytes.truncate(read);
+    let samples = match desc.bits_per_channel {
+        16 => bytes
+            .chunks_exact(2)
+            .map(|b| {
+                if is_little_endian {
+                    i16::from_le_bytes([b[0], b[1]])
+                } else {
+                    i16::from_be_bytes([b[0], b[1]])
+                }
+            })
+            .collect(),
+        // 8-bit PCM is unsigned.
+        8 => bytes.iter().map(|&b| ((b as i16) - 128) << 8).collect(),
+        _ => return None,
+    };
+    Some(DecodedPcm {
+        samples,
+        sample_rate: desc.sample_rate,
+        channels: desc.channels_per_frame,
+    })
+}
+
+/// The format that reads produce when the app hasn't set a client format:
+/// the file's format, or 16-bit PCM for a compressed file.
+fn default_client_format(decoded: &DecodedPcm) -> AudioStreamBasicDescription {
+    AudioStreamBasicDescription {
+        sample_rate: decoded.sample_rate,
+        format_id: kAudioFormatLinearPCM,
+        format_flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+        bytes_per_packet: 2 * decoded.channels,
+        frames_per_packet: 1,
+        bytes_per_frame: 2 * decoded.channels,
+        channels_per_frame: decoded.channels,
+        bits_per_channel: 16,
+        _reserved: 0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -114,11 +203,14 @@ fn register_ext_audio_file(
     wrapped_id: Option<AudioFileID>,
     out_ext_audio_file: MutPtr<ExtAudioFileRef>,
 ) -> OSStatus {
+    let mut audio_file = audio_file;
+    let decoded = decode_audio_file(&mut audio_file);
     let host_object = ExtAudioFileHostObject {
         audio_file,
         client_format: None,
         frame_position: 0,
         wrapped_audio_file_id: wrapped_id,
+        decoded,
     };
     let guest_ref = env.mem.alloc_and_write(OpaqueExtAudioFileID { _filler: 0 });
     State::get(&mut env.framework_state)
@@ -330,10 +422,15 @@ pub fn ExtAudioFileGetProperty(
             env.mem.write(out_property_data.cast(), desc);
         }
         kExtAudioFileProperty_ClientDataFormat => {
-            let desc = host_object
-                .client_format
-                .unwrap_or_else(|| build_asbd(&host_object.audio_file));
+            let desc = host_object.client_format.unwrap_or_else(|| match &host_object.decoded {
+                Some(decoded) => default_client_format(decoded),
+                None => build_asbd(&host_object.audio_file),
+            });
             env.mem.write(out_property_data.cast(), desc);
+        }
+        kExtAudioFileProperty_FileLengthFrames if host_object.decoded.is_some() => {
+            let total_frames = host_object.decoded.as_ref().unwrap().frames() as i64;
+            env.mem.write(out_property_data.cast(), total_frames);
         }
         kExtAudioFileProperty_FileLengthFrames => {
             let total_frames: i64 = match &host_object.audio_file {
@@ -451,6 +548,134 @@ pub struct AudioBufferList {
 }
 unsafe impl SafeRead for AudioBufferList {}
 
+/// Produce up to `frames_requested` frames of `client` format audio, starting
+/// at client frame `position`, into the buffers of `io_data`. Returns the
+/// number of frames written.
+fn read_decoded(
+    mem: &mut crate::mem::Mem,
+    decoded: &DecodedPcm,
+    client: &AudioStreamBasicDescription,
+    position: u64,
+    frames_requested: u32,
+    io_data: MutPtr<AudioBufferList>,
+) -> (u32, OSStatus) {
+    use crate::frameworks::core_audio_types::kAudioFormatFlagIsFloat;
+    const kAudioFormatFlagIsNonInterleaved: u32 = 1 << 5;
+    const kLinearPCMFormatFlagsSampleFractionShift: u32 = 7;
+    const kLinearPCMFormatFlagsSampleFractionMask: u32 = 0x3f << 7;
+
+    let client_format_id = client.format_id;
+    if client_format_id != kAudioFormatLinearPCM {
+        return (0, kExtAudioFileError_NonPCMClientFormat);
+    }
+    let flags = client.format_flags;
+    let out_channels = client.channels_per_frame.max(1);
+    let bits = client.bits_per_channel;
+    let is_float = flags & kAudioFormatFlagIsFloat != 0;
+    let non_interleaved = flags & kAudioFormatFlagIsNonInterleaved != 0;
+    let fraction_bits =
+        (flags & kLinearPCMFormatFlagsSampleFractionMask) >> kLinearPCMFormatFlagsSampleFractionShift;
+    let bytes_per_sample = (bits / 8).max(1);
+
+    let number_buffers: u32 = mem.read(io_data.cast::<u32>());
+    let buffers_base: MutPtr<u32> = io_data.cast::<u32>() + 1;
+    let buffer_at = |mem: &crate::mem::Mem, i: u32| -> (u32, u32, MutVoidPtr) {
+        let p = buffers_base + i * 3;
+        (mem.read(p), mem.read(p + 1), MutVoidPtr::from_bits(mem.read(p + 2)))
+    };
+
+    // How many frames fit in the buffers?
+    let (_, first_size, _) = buffer_at(mem, 0);
+    let frame_bytes = if non_interleaved {
+        bytes_per_sample
+    } else {
+        bytes_per_sample * out_channels
+    };
+    let capacity = first_size / frame_bytes.max(1);
+
+    let in_channels = decoded.channels.max(1);
+    let ratio = decoded.sample_rate / client.sample_rate.max(1.0);
+    let total_out_frames = (decoded.frames() as f64 / ratio).floor() as u64;
+    let available = total_out_frames.saturating_sub(position);
+    let frames = u64::from(frames_requested.min(capacity)).min(available) as u32;
+
+    let sample_at = |frame: u64, channel: u32| -> f32 {
+        let frame = frame.min(decoded.frames().saturating_sub(1));
+        let c = if in_channels == 1 { 0 } else { channel.min(in_channels - 1) };
+        f32::from(decoded.samples[(frame * u64::from(in_channels) + u64::from(c)) as usize]) / 32768.0
+    };
+    // Sample of the decoded audio at a client frame, with linear
+    // interpolation for resampling and simple up/down mixing.
+    let value_at = |out_frame: u64, out_channel: u32| -> f32 {
+        let src = out_frame as f64 * ratio;
+        let i = src.floor() as u64;
+        let t = (src - src.floor()) as f32;
+        let get = |frame: u64| -> f32 {
+            if out_channels == 1 && in_channels > 1 {
+                (0..in_channels).map(|c| sample_at(frame, c)).sum::<f32>() / in_channels as f32
+            } else {
+                sample_at(frame, out_channel)
+            }
+        };
+        get(i) * (1.0 - t) + get(i + 1) * t
+    };
+    let encode = |v: f32, out: &mut [u8]| {
+        let v = v.clamp(-1.0, 1.0);
+        if is_float && bits == 32 {
+            out.copy_from_slice(&v.to_le_bytes());
+        } else if is_float && bits == 64 {
+            out.copy_from_slice(&f64::from(v).to_le_bytes());
+        } else if bits == 32 {
+            // Fixed point (e.g. the 8.24 "canonical" AudioUnit format) or
+            // full-range 32-bit.
+            let scale = if fraction_bits > 0 {
+                (1u64 << fraction_bits) as f32
+            } else {
+                2147483647.0
+            };
+            out.copy_from_slice(&((v * scale) as i32).to_le_bytes());
+        } else if bits == 8 {
+            out[0] = ((v * 127.0) as i32 + 128) as u8;
+        } else {
+            out.copy_from_slice(&((v * 32767.0) as i16).to_le_bytes());
+        }
+    };
+
+    if frames > 0 {
+        if non_interleaved {
+            for ch in 0..number_buffers.min(out_channels) {
+                let (_, size, data) = buffer_at(mem, ch);
+                if data.is_null() {
+                    continue;
+                }
+                let n = (frames * bytes_per_sample).min(size);
+                let out = mem.bytes_at_mut(data.cast(), n);
+                for f in 0..(n / bytes_per_sample) {
+                    let o = (f * bytes_per_sample) as usize;
+                    encode(value_at(position + u64::from(f), ch), &mut out[o..o + bytes_per_sample as usize]);
+                }
+            }
+        } else {
+            let (_, _, data) = buffer_at(mem, 0);
+            if !data.is_null() {
+                let out = mem.bytes_at_mut(data.cast(), frames * frame_bytes);
+                for f in 0..frames {
+                    for ch in 0..out_channels {
+                        let o = (f * frame_bytes + ch * bytes_per_sample) as usize;
+                        encode(value_at(position + u64::from(f), ch), &mut out[o..o + bytes_per_sample as usize]);
+                    }
+                }
+            }
+        }
+    }
+    // Report how much was written in each buffer.
+    for i in 0..number_buffers {
+        let size_ptr: MutPtr<u32> = buffers_base + i * 3 + 1;
+        mem.write(size_ptr, frames * frame_bytes);
+    }
+    (frames, 0)
+}
+
 pub fn ExtAudioFileRead(
     env: &mut Environment,
     in_ext_audio_file: ExtAudioFileRef,
@@ -478,6 +703,18 @@ pub fn ExtAudioFileRead(
         );
         return kExtAudioFileError_InvalidOperationOrder;
     };
+
+    if let Some(decoded) = &host.decoded {
+        let client = host
+            .client_format
+            .unwrap_or_else(|| default_client_format(decoded));
+        let position = host.frame_position;
+        let (frames_read, status) =
+            read_decoded(&mut env.mem, decoded, &client, position, frames_requested, io_data);
+        host.frame_position += u64::from(frames_read);
+        env.mem.write(io_num_frames, frames_read);
+        return status;
+    }
 
     // Extract format info safely from real or dummy files
     let (frames_per_packet, packet_size) = match &host.audio_file {

@@ -286,6 +286,35 @@ pub fn handle_event(env: &mut Environment, event: Event) {
     for touch in touch_ids {
         env.objc.borrow_mut::<UITouchHostObject>(touch).phase = UITouchPhaseStationary;
     }
+    {
+        // Diagnostics for apps that don't react to touches: the first few
+        // touch events of each kind, with what the app is tracking.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static DOWN: AtomicU32 = AtomicU32::new(0);
+        static MOVE: AtomicU32 = AtomicU32::new(0);
+        static UP: AtomicU32 = AtomicU32::new(0);
+        let (kind, counter, map) = match &event {
+            Event::TouchesDown(map) => ("down", &DOWN, Some(map)),
+            Event::TouchesMove(map) => ("move", &MOVE, Some(map)),
+            Event::TouchesUp(map) => ("up", &UP, Some(map)),
+            _ => ("", &DOWN, None),
+        };
+        if let Some(map) = map {
+            let n = counter.fetch_add(1, Ordering::Relaxed);
+            if n < 12 {
+                let tracked = env.framework_state.uikit.ui_touch.current_touches.len();
+                let rotation = env.window.as_ref().map(|w| format!("{:?}", w.current_rotation()));
+                log!(
+                    "Touch event #{} {}: {:?} (touches already tracked: {}, rotation: {:?}) [logged for the first 12 of each kind]",
+                    n + 1,
+                    kind,
+                    map,
+                    tracked,
+                    rotation
+                );
+            }
+        }
+    }
     match event {
         Event::TouchesDown(map) => handle_touches_down(env, map),
         Event::TouchesMove(map) => handle_touches_move(env, map),
