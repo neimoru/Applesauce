@@ -25,53 +25,31 @@
 //!
 //! Эта реализация повторяет структуру `UIPinchGestureRecognizer`.
 
+use super::ui_gesture_recognizer::{GestureKind, UIGestureRecognizerHostObject};
 use crate::frameworks::core_graphics::CGFloat;
-use crate::objc::{id, objc_classes, ClassExports, HostObject, NSZonePtr};
-
-// MARK: - UIRotationGestureRecognizer host object
-
-#[derive(Default)]
-struct UIRotationGestureRecognizerHostObject {
-    /// Текущий угол поворота в радианах относительно начала распознавания
-    /// жеста. По умолчанию 0.
-    rotation: CGFloat,
-    /// Скорость поворота в радианах в секунду. Свойство `velocity` доступно
-    /// только для чтения в публичном API, но мы храним его, чтобы код,
-    /// эмулирующий распознавание, мог его обновлять.
-    velocity: CGFloat,
-}
-impl HostObject for UIRotationGestureRecognizerHostObject {}
+use crate::objc::{id, objc_classes, ClassExports, NSZonePtr};
 
 pub const CLASSES: ClassExports = objc_classes! {
 
 (env, this, _cmd);
 
-// =========================================================================
-// MARK: - UIRotationGestureRecognizer
-// =========================================================================
-
 @implementation UIRotationGestureRecognizer: UIGestureRecognizer
 
 + (id)allocWithZone:(NSZonePtr)_zone {
-    let host_object = Box::new(UIRotationGestureRecognizerHostObject {
-        rotation: 0.0,
-        velocity: 0.0,
-    });
+    let host_object = Box::new(UIGestureRecognizerHostObject::new(GestureKind::Rotation));
     env.objc.alloc_object(this, host_object, &mut env.mem)
 }
 
-// MARK: - Свойства UIRotationGestureRecognizer
-
 - (CGFloat)rotation {
-    env.objc.borrow::<UIRotationGestureRecognizerHostObject>(this).rotation
+    env.objc.borrow::<UIGestureRecognizerHostObject>(this).rotation
 }
 
 - (())setRotation:(CGFloat)rotation {
-    env.objc.borrow_mut::<UIRotationGestureRecognizerHostObject>(this).rotation = rotation;
+    env.objc.borrow_mut::<UIGestureRecognizerHostObject>(this).rotation = rotation;
 }
 
 - (CGFloat)velocity {
-    env.objc.borrow::<UIRotationGestureRecognizerHostObject>(this).velocity
+    env.objc.borrow::<UIGestureRecognizerHostObject>(this).scalar_velocity
 }
 
 @end

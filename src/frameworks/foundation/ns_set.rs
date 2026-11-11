@@ -117,6 +117,12 @@ pub const CLASSES: ClassExports = objc_classes! {
     retain(env, this)
 }
 
+// NSMutableCopying implementation
+- (id)mutableCopyWithZone:(NSZonePtr)_zone {
+    let new: id = msg_class![env; _touchHLE_NSMutableSet alloc];
+    msg![env; new initWithSet:this]
+}
+
 - (id)initWithCoder:(id)coder {
     let class: crate::objc::Class = msg![env; coder class];
     let keyed_unarch_class: crate::objc::Class = msg_class![env; NSKeyedUnarchiver class];
@@ -306,8 +312,8 @@ pub const CLASSES: ClassExports = objc_classes! {
 // (which is implemented for our private subclass) and reuse the
 // +[NSSet setWithArray:] code path to build a fresh immutable set.
 - (id)copyWithZone:(NSZonePtr)_zone {
-    let objects: id = msg![env; this allObjects];
-    msg_class![env; NSSet setWithArray:objects]
+    let new: id = msg_class![env; _touchHLE_NSSet alloc];
+    msg![env; new initWithSet:this]
 }
 
 @end
@@ -434,14 +440,19 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.objc.alloc_object(this, host_object, &mut env.mem)
 }
 
-// NSCopying implementation
+// NSCopying implementation: a mutable set's copy is an immutable
+// snapshot, and its mutable copy is an independent mutable set. Returning
+// the receiver here made code that removes objects from a "copy" while
+// enumerating the original (e.g. cocos2d's CCTouchDispatcher) mutate the
+// original set.
 - (id)copyWithZone:(NSZonePtr)_zone {
-    retain(env, this)
+    let new: id = msg_class![env; _touchHLE_NSSet alloc];
+    msg![env; new initWithSet:this]
 }
 
-// NSCopying implementation
 - (id)mutableCopyWithZone:(NSZonePtr)_zone {
-    retain(env, this)
+    let new: id = msg_class![env; _touchHLE_NSMutableSet alloc];
+    msg![env; new initWithSet:this]
 }
 
 - (id)initWithCapacity:(NSUInteger)_numItems {

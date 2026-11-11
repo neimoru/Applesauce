@@ -635,7 +635,7 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     for (view, v_set) in view_touches {
         let _: () = msg![env;
             view touchesBegan:v_set withEvent:event];
-        super::ui_gesture_recognizer::touches_began(env, view, v_set);
+        super::ui_gesture_recognizer::touches_began(env, view, v_set, event);
         touchhle_send_cocos_touch_aliases_to_chain(env, view, "began", v_set, event);
     }
     release(env, pool);
@@ -703,7 +703,7 @@ fn handle_touches_move(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     for (view, v_set) in view_touches {
         let _: () = msg![env;
             view touchesMoved:v_set withEvent:event];
-        super::ui_gesture_recognizer::touches_moved(env, view, v_set);
+        super::ui_gesture_recognizer::touches_moved(env, view, v_set, event);
         touchhle_send_cocos_touch_aliases_to_chain(env, view, "moved", v_set, event);
     }
     release(env, pool);
@@ -854,7 +854,7 @@ fn handle_touches_up(env: &mut Environment, map: HashMap<FingerId, Coords>) {
     for (view, v_set) in view_touches {
         let _: () = msg![env;
             view touchesEnded:v_set withEvent:event];
-        super::ui_gesture_recognizer::touches_ended(env, view, v_set);
+        super::ui_gesture_recognizer::touches_ended(env, view, v_set, event);
         touchhle_send_cocos_touch_aliases_to_chain(env, view, "ended", v_set, event);
     }
 
