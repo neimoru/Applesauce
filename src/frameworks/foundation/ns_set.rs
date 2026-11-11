@@ -68,10 +68,14 @@ pub const CLASSES: ClassExports = objc_classes! {
     autorelease(env, new)
 }
 
-+ (id)setWithSet:(id)object {
-    // assert!(object != nil);
++ (id)setWithSet:(id)set {
+    // A new set with the same members as `set` (not containing `set`!).
     let new: id = msg![env; this alloc];
-    let new: id = msg![env; new initWithObject:object];
+    let new: id = if set == nil {
+        msg![env; new init]
+    } else {
+        msg![env; new initWithSet:set]
+    };
     autorelease(env, new)
 }
 
