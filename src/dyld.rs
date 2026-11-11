@@ -1660,9 +1660,15 @@ impl Dyld {
         cpu: &mut Cpu,
         symbol: &str,
     ) -> Result<GuestFunction, ()> {
+        let known = self.linked_host_functions.len();
         let function_ptr = self.create_proc_address_no_inval(mem, symbol)?;
-        // Just in case
-        cpu.invalidate_cache_range(function_ptr.addr_without_thumb_bit(), 8);
+        // Only newly written code needs the JIT cache invalidated. Some
+        // methods (e.g. `-[NSObject methodForSelector:]`) get the same
+        // function over and over, sometimes every frame, and invalidating
+        // each time is very slow.
+        if self.linked_host_functions.len() != known {
+            cpu.invalidate_cache_range(function_ptr.addr_without_thumb_bit(), 8);
+        }
         Ok(function_ptr)
     }
 
