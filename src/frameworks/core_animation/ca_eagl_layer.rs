@@ -227,7 +227,18 @@ pub fn find_fullscreen_eagl_layer(env: &mut Environment) -> id {
             return nil;
         }
 
-        if let Some(&next) = layer_host_obj.sublayers.last() {
+        // Follow the topmost sublayer that actually draws. Hidden or fully
+        // transparent sublayers don't cover anything, so they mustn't stop
+        // the fast path: TinkerBox HD, for example, adds a hidden
+        // UITextField on top of its EAGLView to bring up the keyboard, and
+        // treating it as covering the screen switched presentation to the
+        // compositor, which on iOS swaps the host view and dismisses the
+        // keyboard straight away.
+        let next = layer_host_obj.sublayers.iter().rev().copied().find(|&sublayer| {
+            let host_obj: &CALayerHostObject = env.objc.borrow(sublayer);
+            !host_obj.hidden && host_obj.opacity > 0.0
+        });
+        if let Some(next) = next {
             layer = next;
         } else {
             break;

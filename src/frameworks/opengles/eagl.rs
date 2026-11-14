@@ -615,6 +615,22 @@ pub const CLASSES: ClassExports = objc_classes! {
     }
 
     let fullscreen_layer = find_fullscreen_eagl_layer(env);
+    {
+        // Switching between the direct and the composited presentation path
+        // is worth knowing about: on iOS each switch changes which host view
+        // is on screen.
+        use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+        static LAST: AtomicU8 = AtomicU8::new(0);
+        static SWITCHES: AtomicU32 = AtomicU32::new(0);
+        let now = if fullscreen_layer == nil { 2 } else { 1 };
+        let last = LAST.swap(now, Ordering::Relaxed);
+        if last != 0 && last != now && SWITCHES.fetch_add(1, Ordering::Relaxed) < 10 {
+            log!(
+                "Presentation switched to the {} path [logged for the first 10 switches]",
+                if now == 1 { "direct (fullscreen layer)" } else { "composited" }
+            );
+        }
+    }
 
     // Unclear from documentation if this method requires the context to be
     // current, but it would be weird if it didn't?
